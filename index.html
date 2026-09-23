@@ -1,0 +1,224 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="autocomplete" content="off" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>برنامج ميزان للمحاسبة وإدارة الأعمال - By Adel Samir - واتس: 01002655282</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ===== الشريط العلوي ===== -->
+  <header class="app-header">
+    <div class="header-right">
+      <span class="app-title">⚖️ برنامج ميزان للمحاسبة وإدارة الأعمال</span>
+      <span class="app-sub">By Adel Samir - واتس: 01002655282</span>
+    </div>
+    <div class="header-left">
+      <span class="db-status">🟢 متصل</span>
+      <span id="clock"></span>
+      <span>👤 المستخدم: مدير النظام | الصلاحية: مدير | الفرع الرئيسي</span>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <!-- ===== القائمة الجانبية ===== -->
+    <aside class="sidebar" id="sidebar">
+      <button class="nav-btn">📊  لوحة التحكم</button>
+      <button class="nav-btn">🛍️  فواتير المبيعات (POS)</button>
+      <button class="nav-btn">📦  فواتير المشتريات</button>
+      <button class="nav-btn">🔍  استعلام عن الفواتير</button>
+      <button class="nav-btn">🏷️  الأصناف والمخزون</button>
+      <button class="nav-btn active">👨‍💼  دليل العملاء</button>
+      <button class="nav-btn">📦  دليل الموردين</button>
+      <button class="nav-btn">💵  الخزينة والمصروفات</button>
+      <button class="nav-btn">💰  دليل الحسابات</button>
+      <button class="nav-btn">📝  القيود اليومية</button>
+      <button class="nav-btn">⚖️  قائمة المركز المالي</button>
+      <button class="nav-btn">📑  كشوف حسابات الخزائن</button>
+      <button class="nav-btn">📈  تقارير المبيعات والمشتريات</button>
+      <button class="nav-btn">👤  المستخدمون والصلاحيات</button>
+      <button class="nav-btn">📋  سجل العمليات</button>
+      <button class="nav-btn">⚙️  الإعدادات والنسخ الاحتياطي</button>
+    </aside>
+
+    <!-- ===== منطقة العرض ===== -->
+    <main class="content">
+
+      <!-- شاشة دليل العملاء -->
+      <section class="view view-customers" id="viewCustomers">
+
+        <!-- شريط العنوان والأزرار -->
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnAddCustomer" class="btn blue" type="button">➕ إضافة عميل جديد</button>
+            <button id="btnPayCustDebt" class="btn green" type="button">💵 تحصيل مديونية</button>
+          </div>
+          <h1 class="view-title">👨‍💼 دليل العملاء والمستحق عليهم</h1>
+        </div>
+
+        <!-- شريط البحث -->
+        <div class="search-bar">
+          <input type="text" id="txtCustomerSearch" class="search-input" autocomplete="new-search" />
+          <label class="search-label" for="txtCustomerSearch">🔍 بحث شامل في العملاء (كود، اسم، هاتف، عنوان، ملاحظات، رصيد):</label>
+        </div>
+
+        <!-- جدول العملاء -->
+        <div class="table-wrap">
+          <table id="dgvCustomers" class="dgv">
+            <thead>
+              <tr>
+                <th id="thId" hidden>المعرف</th>
+                <th style="width:9%">كود العميل</th>
+                <th style="width:22%">اسم العميل</th>
+                <th style="width:12%">رقم الهاتف</th>
+                <th style="width:12%">هاتف آخر</th>
+                <th style="width:19%">العنوان</th>
+                <th style="width:19%">ملاحظات</th>
+                <th style="width:14%">الرصيد الحالي (المديونية)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+      </section>
+
+      <!-- ====== صفحة كشف الحساب للطباعة ====== -->
+      <section class="print-only statement-page" id="statementPage">
+        <div class="statement-head">
+          <h2>📋 كشف حساب تفصيلي: <span id="stmName"></span></h2>
+          <p>الكود: <span id="stmCode"></span> | الفترة: <span id="stmRange"></span> | الرصيد الحالي: <span id="stmBal"></span> ج.م</p>
+          <p class="stmt-brand">برنامج «ميزان» للمحاسبة وإدارة الأعمال | By Adel Samir - واتس: 01002655282</p>
+        </div>
+        <table class="stmt-table">
+          <thead>
+            <tr>
+              <th>التاريخ</th><th>البيان</th><th>مدين (ج.م)</th><th>دائن (ج.م)</th><th>الرصيد (ج.م)</th>
+            </tr>
+          </thead>
+          <tbody id="stmBody"></tbody>
+        </table>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ===== التذييل ===== -->
+  <footer class="app-footer">
+    <span>برنامج «ميزان» للمحاسبة وإدارة الأعمال | الإصدار 1.0</span>
+    <span>حقوق الملكية والبرمجة والتطوير محفوظة © By Adel Samir - واتس: 01002655282</span>
+  </footer>
+
+  <!-- ================== النوافذ الحوارية ================== -->
+
+  <!-- نافذة إضافة / تعديل عميل -->
+  <div class="modal-overlay" id="mAddEdit" hidden>
+    <div class="modal m480" id="mAddEditBox">
+      <h3 id="addEditTitle">إضافة عميل جديد</h3>
+      <div class="form-grid">
+        <label for="fCode">كود العميل: *</label>
+        <input type="text" id="fCode" autocomplete="off" />
+        <label for="fName">اسم العميل: *</label>
+        <input type="text" id="fName" autocomplete="off" />
+        <label for="fPhone">رقم الهاتف الرئيسي:</label>
+        <input type="text" id="fPhone" autocomplete="off" />
+        <label for="fSecPhone">هاتف آخر (إضافي):</label>
+        <input type="text" id="fSecPhone" autocomplete="off" />
+        <label for="fWallet">رقم المحفظة الإلكترونية (محفظة العميل):</label>
+        <input type="text" id="fWallet" autocomplete="off" />
+        <label for="fAddress">العنوان:</label>
+        <input type="text" id="fAddress" autocomplete="off" />
+        <label for="fNotes">ملاحظات:</label>
+        <input type="text" id="fNotes" autocomplete="off" />
+        <label for="fBalance">الرصيد الافتتاحي (مدين):</label>
+        <input type="text" id="fBalance" value="0.00" autocomplete="off" />
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelAdd" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveCustomer" class="btn blue" type="button">💾 إضافة العميل</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة تحصيل مديونية -->
+  <div class="modal-overlay" id="mPayDebt" hidden>
+    <div class="modal m500" id="mPayDebtBox">
+      <h3>💵 تحصيل مديونية من عميل - By Adel Samir - واتس: 01002655282</h3>
+      <div class="form-grid">
+        <label for="pCust">اختيار العميل: *</label>
+        <select id="pCust"></select>
+        <label for="pMethod">طريقة السداد:</label>
+        <select id="pMethod">
+          <option>نقداً 💵</option>
+          <option>تحويل بنكي 🏛️</option>
+          <option>محفظة إلكترونية 📱</option>
+        </select>
+        <label for="pTreasury">الخزينة / الحساب:</label>
+        <select id="pTreasury"></select>
+        <label for="pWalletFrom" id="lblWalletFrom" hidden>📱 التحويل من رقم هاتف:</label>
+        <input type="text" id="pWalletFrom" hidden autocomplete="off" />
+        <label for="pWalletTo" id="lblWalletTo" hidden>التحويل إلى رقم هاتف:</label>
+        <input type="text" id="pWalletTo" hidden autocomplete="off" />
+        <label for="pAmount">المبلغ المحصل (ج.م): *</label>
+        <input type="text" id="pAmount" autocomplete="off" />
+        <label for="pNotes">ملاحظات / بيان السداد:</label>
+        <input type="text" id="pNotes" value="تحصيل دفعة نقداً من حساب العميل" autocomplete="off" />
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelPay" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSavePay" class="btn green" type="button">💾 حفظ وسداد المديونية</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة خيارات العميل -->
+  <div class="modal-overlay" id="mActions" hidden>
+    <div class="modal m560" id="mActionsBox">
+      <h3 id="actTitle">👤 إدارة العميل</h3>
+      <div class="act-info">
+        <div class="act-head" id="actName">👤 العميل:</div>
+        <div class="act-line" id="actDetails1">الكود: - | الهاتف: - | هاتف آخر: -</div>
+        <div class="act-line" id="actDetails2">العنوان: - | ملاحظات: -</div>
+        <div class="act-bal" id="actBalance">الرصيد الحالي (المديونية): 0.00 ج.م</div>
+      </div>
+      <div class="act-btns">
+        <button class="btn teal act-row1" id="actStatement" type="button">📜 عرض وطباعة كشف الحساب</button>
+        <button class="btn blue act-row1" id="actEdit" type="button">✏️ تعديل بيانات العميل</button>
+        <button class="btn sky act-row2" id="actInvoice" type="button">🧾 فاتورة مبيعات جديدة باسم هذا العميل</button>
+        <button class="btn green act-row2" id="actPay" type="button">💵 تحصيل مديونية / تسجيل دفعة</button>
+        <button class="btn red act-row3" id="actDelete" type="button">🗑️ حذف العميل</button>
+        <button class="btn light act-row4" id="actClose" type="button">❌ إغلاق النافذة</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة كشف الحساب -->
+  <div class="modal-overlay" id="mStatement" hidden>
+    <div class="modal m640 modal-tall">
+      <h3 id="stmTitle">📋 كشف حساب تفصيلي</h3>
+      <div class="stmt-scroll">
+        <div class="stmt-head-mini" id="stmHeadMini"></div>
+        <table class="dgv stmt-table">
+          <thead>
+            <tr>
+              <th>التاريخ</th><th>البيان</th><th>مدين (ج.م)</th><th>دائن (ج.م)</th><th>الرصيد (ج.م)</th>
+            </tr>
+          </thead>
+          <tbody id="stmBodyMini"></tbody>
+        </table>
+      </div>
+      <div class="modal-actions">
+        <button id="btnCloseStmt" class="btn gray" type="button">❌ إغلاق</button>
+        <button id="btnPrintStmt" class="btn blue" type="button">🖨️ طباعة الآن (Print)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- التنبيهات -->
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
