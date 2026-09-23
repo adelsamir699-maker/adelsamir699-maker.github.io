@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="autocomplete" content="off" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>برنامج ميزان للمحاسبة وإدارة الأعمال - By Adel Samir - واتس: 01002655282</title>
+  <title>mizan web - برنامج ميزان للمحاسبة وإدارة الأعمال - By Adel Samir - واتس: 01002655282</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -12,7 +12,7 @@
   <!-- ===== الشريط العلوي ===== -->
   <header class="app-header">
     <div class="header-right">
-      <span class="app-title">⚖️ برنامج ميزان للمحاسبة وإدارة الأعمال</span>
+      <span class="app-title">⚖️ mizan web - برنامج ميزان للمحاسبة وإدارة الأعمال</span>
       <span class="app-sub">By Adel Samir - واتس: 01002655282</span>
     </div>
     <div class="header-left">
@@ -24,30 +24,174 @@
 
   <div class="app-body">
     <!-- ===== القائمة الجانبية ===== -->
-    <aside class="sidebar" id="sidebar">
-      <button class="nav-btn">📊  لوحة التحكم</button>
-      <button class="nav-btn">🛍️  فواتير المبيعات (POS)</button>
-      <button class="nav-btn">📦  فواتير المشتريات</button>
-      <button class="nav-btn">🔍  استعلام عن الفواتير</button>
-      <button class="nav-btn">🏷️  الأصناف والمخزون</button>
-      <button class="nav-btn active">👨‍💼  دليل العملاء</button>
-      <button class="nav-btn">📦  دليل الموردين</button>
-      <button class="nav-btn">💵  الخزينة والمصروفات</button>
-      <button class="nav-btn">💰  دليل الحسابات</button>
-      <button class="nav-btn">📝  القيود اليومية</button>
-      <button class="nav-btn">⚖️  قائمة المركز المالي</button>
-      <button class="nav-btn">📑  كشوف حسابات الخزائن</button>
-      <button class="nav-btn">📈  تقارير المبيعات والمشتريات</button>
-      <button class="nav-btn">👤  المستخدمون والصلاحيات</button>
-      <button class="nav-btn">📋  سجل العمليات</button>
-      <button class="nav-btn">⚙️  الإعدادات والنسخ الاحتياطي</button>
+<aside class="sidebar" id="sidebar">
+      <button class="nav-btn active" data-view="dashboard">📊  لوحة التحكم</button>
+      <button class="nav-btn" data-view="sales">🛍️  فواتير المبيعات (POS)</button>
+      <button class="nav-btn" data-view="purchases">📦  فواتير المشتريات</button>
+      <button class="nav-btn" data-view="returns">🔍  استعلام عن الفواتير</button>
+      <button class="nav-btn" data-view="products">🏷️  الأصناف والمخزون</button>
+      <button class="nav-btn" data-view="customers">👨‍💼  دليل العملاء</button>
+      <button class="nav-btn" data-view="suppliers">📦  دليل الموردين</button>
+      <button class="nav-btn" data-view="treasury">💵  الخزينة والمصروفات</button>
+      <button class="nav-btn" data-view="accounts">💰  دليل الحسابات</button>
+      <button class="nav-btn" data-view="journal">📝  القيود اليومية</button>
+      <button class="nav-btn" data-view="balance">⚖️  قائمة المركز المالي</button>
+      <button class="nav-btn" data-view="treasuryStatements">📑  كشوف حسابات الخزائن</button>
+      <button class="nav-btn" data-view="reports">📈  تقارير المبيعات والمشتريات</button>
+      <button class="nav-btn" data-view="users">👤  المستخدمون والصلاحيات</button>
+      <button class="nav-btn" data-view="audit">📋  سجل العمليات</button>
+      <button class="nav-btn" data-view="settings">⚙️  الإعدادات والنسخ الاحتياطي</button>
     </aside>
 
     <!-- ===== منطقة العرض ===== -->
-    <main class="content">
+<main class="content">
 
-      <!-- شاشة دليل العملاء -->
-      <section class="view view-customers" id="viewCustomers">
+      <!-- ===== شاشة لوحة التحكم ===== -->
+      <section class="view view-dashboard" id="viewDashboard" data-id="dashboard">
+
+        <div class="view-header">
+          <button id="btnRefresh" class="btn gray" type="button">تحديث البيانات 🔄</button>
+          <h1 class="view-title">📊 لوحة التحكم والمؤشرات المالية والمخزنية اليومية - By Adel Samir - واتس: 01002655282</h1>
+        </div>
+
+        <div class="kpi-row">
+          <div class="kpi-card" style="--accent:#2563EB">
+            <div class="kpi-title">🛍️ مبيعات اليوم</div>
+            <div class="kpi-value" id="kSales">0.00 ج.م</div>
+          </div>
+          <div class="kpi-card" style="--accent:#3B82F6">
+            <div class="kpi-title">📦 مشتريات اليوم</div>
+            <div class="kpi-value" id="kPurchases">0.00 ج.م</div>
+          </div>
+          <div class="kpi-card" style="--accent:#F59E0B">
+            <div class="kpi-title">💸 مصروفات اليوم</div>
+            <div class="kpi-value" id="kExpenses">0.00 ج.م</div>
+          </div>
+          <div class="kpi-card" style="--accent:#10B981">
+            <div class="kpi-title">📈 صافي ربح اليوم</div>
+            <div class="kpi-value" id="kProfit">0.00 ج.م</div>
+          </div>
+          <div class="kpi-card" style="--accent:#9333EA">
+            <div class="kpi-title">💵 رصيد الخزينة الحالية</div>
+            <div class="kpi-value" id="kTreasury">0.00 ج.م</div>
+          </div>
+          <div class="kpi-card" style="--accent:#EF4444">
+            <div class="kpi-title">⚠️ أصناف بلغت حد الطلب</div>
+            <div class="kpi-value" id="kLowStock">0</div>
+          </div>
+        </div>
+
+        <div class="tables-row">
+          <div class="data-panel">
+            <div class="panel-title">⚠️ الأصناف القريبة من النفاذ (تنبيه حد الطلب المخزني)</div>
+            <div class="table-wrap">
+              <table id="dgvLowStock" class="dgv">
+                <thead>
+                  <tr>
+                    <th>كود الصنف</th><th>اسم الصنف</th><th>التصنيف</th><th>الرصيد المتبقي</th><th>حد الطلب</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="data-panel">
+            <div class="panel-title">📋 آخر العمليات المنفذة في النظام (سجل التدقيق)</div>
+            <div class="table-wrap">
+              <table id="dgvActivity" class="dgv">
+                <thead>
+                  <tr>
+                    <th>الوقت</th><th>المستخدم</th><th>العملية</th><th>البيان والتفاصيل</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ===== شاشة فواتير المبيعات (POS) ===== -->
+      <section class="view view-sales" id="viewSales" data-id="sales" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnQuickAddProduct" class="btn teal" type="button">➕ إضافة صنف جديد للمخزن</button>
+            <button id="btnQuickAddCust" class="btn sky" type="button">➕ إضافة عميل جديد</button>
+          </div>
+          <h1 class="view-title">🛍️ شاشة فواتير المبيعات ونقاط البيع (POS) - By Adel Samir - واتس: 01002655282</h1>
+        </div>
+
+        <div class="pos-fields">
+          <div class="pos-row">
+            <div class="fld"><label>رقم الفاتورة:</label><input id="txtInvoiceNo" class="ro" readonly /></div>
+            <div class="fld"><label>التاريخ:</label><input id="dtpDate" type="date" /></div>
+            <div class="fld grow"><label>العميل:</label><select id="cmbPosCustomer"></select></div>
+            <div class="fld"><label>الدفع:</label>
+              <select id="cmbPaymentMethod">
+                <option>نقداً</option><option>آجل</option><option>تحويل بنكي</option><option>محافظ إلكترونية</option>
+              </select>
+            </div>
+            <div class="fld" id="fldPosBank" hidden><label>البنك المستلم:</label><select id="cmbPosBank"></select></div>
+            <div class="fld" id="fldPosWallet" hidden><label>المحفظة الإلكترونية:</label><select id="cmbPosWallet"></select></div>
+            <div class="fld"><label>المستودع:</label><select id="cmbPosWarehouse"></select></div>
+          </div>
+
+          <div class="pos-row">
+            <div class="fld grow"><label class="lbl-accent">🔍 اكتب اسم الصنف أو الكود ثم Enter:</label>
+              <input id="txtPosSearch" autocomplete="off" list="posProductsList" />
+              <datalist id="posProductsList"></datalist>
+            </div>
+            <div class="fld grow2"><label>📋 أو اختر من قائمة أصناف المخزن:</label><select id="cmbPosPicker"></select></div>
+            <div class="fld"><label>الكمية:</label><input id="numPosQty" type="text" value="1" /></div>
+            <div class="fld"><label>سعر البيع:</label><input id="txtPosPrice" type="text" /></div>
+            <div class="fld fld-btn"><button id="btnPosAdd" class="btn sky" type="button">إضافة ➕</button></div>
+            <div class="stock-badge" id="posStockBadge">
+              <div class="sb-title">📦 رصيد الصنف</div>
+              <div class="sb-line" id="sbName">—</div>
+              <div class="sb-line" id="sbQty">الرصيد: -</div>
+              <div class="sb-line" id="sbPrice">سعر البيع: -</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table id="dgvItems" class="dgv">
+            <thead>
+              <tr>
+                <th style="width:8%">كود الصنف</th>
+                <th style="width:24%">اسم الصنف والمنتج</th>
+                <th style="width:6%">الوحدة</th>
+                <th style="width:8%">الكمية</th>
+                <th style="width:11%">السعر (قبل الضريبة)</th>
+                <th style="width:8%">الخصم</th>
+                <th style="width:11%">الضريبة (14%)</th>
+                <th style="width:14%">الإجمالي شامل الضريبة</th>
+                <th style="width:6%">حذف</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="pos-footer">
+          <div class="pos-foot-row">
+            <span id="lblPosSubTotal" class="ft-sub">المجموع: 0.00 ج.م</span>
+            <span class="fld-inline"><label>خصم إضافي:</label><input id="txtPosDiscount" type="text" value="0" /></span>
+            <span id="lblPosTax" class="ft-tax">ضريبة المبيعات (14%): 0.00 ج.م</span>
+          </div>
+          <div class="pos-foot-row">
+            <span id="lblPosTotal" class="ft-total">الصافي النهائي: 0.00 ج.م</span>
+            <button id="btnPosSave" class="btn green" type="button">💾 حفظ الفاتورة والترحيل</button>
+            <button id="btnPosNew" class="btn dark" type="button">📄 فاتورة جديدة</button>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ===== شاشة دليل العملاء ===== -->
+      <section class="view view-customers" id="viewCustomers" data-id="customers" hidden>
 
         <!-- شريط العنوان والأزرار -->
         <div class="view-header">
@@ -83,6 +227,52 @@
           </table>
         </div>
 
+</section>
+
+      <!-- ===== شاشة الأصناف والمخزون ===== -->
+      <section class="view view-products" id="viewProducts" data-id="products" hidden>
+
+        <!-- شريط العنوان والأزرار -->
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnAddProduct" class="btn green" type="button">➕ إضافة صنف جديد للمخزن</button>
+            <button id="btnStockTake" class="btn orange" type="button">📋 جرد المخزون لكل مستودع</button>
+          </div>
+          <h1 class="view-title">🏷️ دليل الأصناف وإدارة المخزون والتكاليف</h1>
+        </div>
+
+        <!-- شريط البحث والتصفية -->
+        <div class="search-bar">
+          <button id="btnRefreshProducts" class="btn gray" type="button">تحديث 🔄</button>
+          <select id="cmbProductCategory" class="filter-select"><option>الكل</option></select>
+          <label class="filter-label" for="cmbProductCategory">التصنيف:</label>
+          <input type="text" id="txtProductSearch" class="search-input" autocomplete="new-search" />
+          <label class="search-label" for="txtProductSearch">🔍 بحث شامل (كود، باركود، اسم، تصنيف، وحدة، سعر، حالة):</label>
+        </div>
+
+        <!-- جدول الأصناف -->
+        <div class="table-wrap">
+          <table id="dgvProducts" class="dgv">
+            <thead>
+              <tr>
+                <th style="width:9%">كود الصنف</th>
+                <th style="width:11%">الباركود</th>
+                <th style="width:17%">اسم الصنف</th>
+                <th style="width:9%">التصنيف</th>
+                <th style="width:7%">الوحدة</th>
+                <th style="width:8%">الرصيد الحالي</th>
+                <th style="width:10%">سعر الشراء / التكلفة</th>
+                <th style="width:10%">متوسط التكلفة</th>
+                <th style="width:9%">سعر البيع</th>
+                <th style="width:8%">الخصم</th>
+                <th style="width:7%">الحالة</th>
+                <th style="width:8%">تعديل</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
       </section>
 
       <!-- ====== صفحة كشف الحساب للطباعة ====== -->
@@ -92,7 +282,7 @@
           <p>الكود: <span id="stmCode"></span> | الفترة: <span id="stmRange"></span> | الرصيد الحالي: <span id="stmBal"></span> ج.م</p>
           <p class="stmt-brand">برنامج «ميزان» للمحاسبة وإدارة الأعمال | By Adel Samir - واتس: 01002655282</p>
         </div>
-        <table class="stmt-table">
+<table class="stmt-table">
           <thead>
             <tr>
               <th>التاريخ</th><th>البيان</th><th>مدين (ج.م)</th><th>دائن (ج.م)</th><th>الرصيد (ج.م)</th>
@@ -102,12 +292,29 @@
         </table>
       </section>
 
+      <!-- ====== صفحة جرد المخزون للطباعة ====== -->
+      <section class="print-only statement-page" id="stockPage">
+        <div class="statement-head">
+          <h2>📋 جرد المخزون - رصيد البرنامج - مستودع: <span id="skWh"></span></h2>
+          <p>تاريخ الطباعة: <span id="skDate"></span> | إجمالي الأصناف: <span id="skCount"></span></p>
+          <p class="stmt-brand">برنامج «ميزان» للمحاسبة وإدارة الأعمال | By Adel Samir - واتس: 01002655282</p>
+        </div>
+        <table class="stmt-table">
+          <thead>
+            <tr>
+              <th>كود الصنف</th><th>اسم الصنف</th><th>العدد الفعلي على البرنامج</th><th>العدد المعدود</th><th>الفرق</th>
+            </tr>
+          </thead>
+          <tbody id="skBody"></tbody>
+        </table>
+      </section>
+
     </main>
   </div>
 
   <!-- ===== التذييل ===== -->
   <footer class="app-footer">
-    <span>برنامج «ميزان» للمحاسبة وإدارة الأعمال | الإصدار 1.0</span>
+    <span>mizan web | برنامج «ميزان» للمحاسبة وإدارة الأعمال | الإصدار 1.0</span>
     <span>حقوق الملكية والبرمجة والتطوير محفوظة © By Adel Samir - واتس: 01002655282</span>
   </footer>
 
@@ -191,6 +398,134 @@
         <button class="btn red act-row3" id="actDelete" type="button">🗑️ حذف العميل</button>
         <button class="btn light act-row4" id="actClose" type="button">❌ إغلاق النافذة</button>
       </div>
+    </div>
+  </div>
+
+<!-- نافذة إضافة / تعديل صنف -->
+  <div class="modal-overlay" id="mProduct" hidden>
+    <div class="modal m640 modal-tall" id="mProductBox">
+      <h3 id="productModalTitle">➕ إضافة صنف جديد للمخزن</h3>
+      <div class="form-grid form-grid-scroll">
+        <label for="fPCode">كود الصنف الفريد: *</label>
+        <input type="text" id="fPCode" autocomplete="off" />
+        <label for="fPBarcode">رقم الباركود:</label>
+        <input type="text" id="fPBarcode" autocomplete="off" />
+        <label for="fPNameAr">اسم الصنف بالعربية: *</label>
+        <input type="text" id="fPNameAr" autocomplete="off" />
+        <label for="fPNameEn">اسم الصنف بالإنجليزية:</label>
+        <input type="text" id="fPNameEn" autocomplete="off" />
+        <label for="fPCategory">تصنيف الصنف: *</label>
+        <select id="fPCategory"></select>
+        <label for="fPUnit">وحدة القياس: *</label>
+        <select id="fPUnit"></select>
+        <label for="fPWarehouse">المستودع الافتراضي للصنف:</label>
+        <select id="fPWarehouse"></select>
+        <label for="fPPurchase">سعر الشراء / التكلفة (ج.م):</label>
+        <input type="text" id="fPPurchase" value="0.00" autocomplete="off" />
+        <label for="fPSale">سعر البيع الافتراضي (ج.م):</label>
+        <input type="text" id="fPSale" value="0.00" autocomplete="off" />
+        <label for="fPStock">الرصيد الافتتاحي (الكمية):</label>
+        <input type="text" id="fPStock" value="0" autocomplete="off" />
+        <label for="fPDiscount">نسبة خصم العرض على الصنف (%):</label>
+        <input type="text" id="fPDiscount" value="0" autocomplete="off" />
+        <label for="fPDiscStart">بداية فترة الخصم (اختياري):</label>
+        <input type="date" id="fPDiscStart" autocomplete="off" />
+        <label for="fPDiscEnd">نهاية فترة الخصم (اختياري):</label>
+        <input type="date" id="fPDiscEnd" autocomplete="off" />
+        <label for="fPStatus">حالة الصنف في النظام:</label>
+        <select id="fPStatus">
+          <option value="1">نشط (متاح للبيع في الفواتير) 🟢</option>
+          <option value="0">غير نشط (معطل - غير متاح للبيع) 🔴</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelProduct" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveProduct" class="btn blue" type="button">💾 حفظ الصنف</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة إضافة سريعة: صنف -->
+  <div class="modal-overlay" id="mQuickProduct" hidden>
+    <div class="modal m560" id="mQuickProductBox">
+      <h3>➕ إضافة صنف جديد للمخزن - By Adel Samir - واتس: 01002655282</h3>
+      <div class="form-grid">
+        <label for="qCode">كود الصنف: *</label>
+        <input type="text" id="qCode" autocomplete="off" />
+        <label for="qName">اسم الصنف: *</label>
+        <input type="text" id="qName" autocomplete="off" />
+        <label for="qCat">التصنيف:</label>
+        <select id="qCat"></select>
+        <label for="qUnit">الوحدة:</label>
+        <select id="qUnit"></select>
+        <label for="qQty">الرصيد الافتتاحي في المخزن:</label>
+        <input type="text" id="qQty" value="10" autocomplete="off" />
+        <label for="qCost">سعر الشراء / التكلفة (ج.م):</label>
+        <input type="text" id="qCost" value="100" autocomplete="off" />
+        <label for="qSale">سعر البيع (ج.م): *</label>
+        <input type="text" id="qSale" value="150" autocomplete="off" />
+        <label for="qDisc">نسبة خصم العرض على الصنف (%):</label>
+        <input type="text" id="qDisc" value="0" autocomplete="off" />
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelQuickProduct" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveQuickProduct" class="btn green" type="button">💾 حفظ الصنف في المخزن</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة إضافة سريعة: عميل -->
+  <div class="modal-overlay" id="mQuickCustomer" hidden>
+    <div class="modal m500" id="mQuickCustomerBox">
+      <h3>➕ إضافة عميل جديد - By Adel Samir - واتس: 01002655282</h3>
+      <div class="form-grid">
+        <label for="qCCode">كود العميل: *</label>
+        <input type="text" id="qCCode" autocomplete="off" />
+        <label for="qCName">اسم العميل: *</label>
+        <input type="text" id="qCName" autocomplete="off" />
+        <label for="qCPhone">رقم الهاتف:</label>
+        <input type="text" id="qCPhone" autocomplete="off" />
+        <label for="qCWallet">رقم المحفظة الإلكترونية:</label>
+        <input type="text" id="qCWallet" autocomplete="off" />
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelQuickCustomer" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveQuickCustomer" class="btn green" type="button">💾 حفظ العميل</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة جرد المخزون لكل مستودع -->
+  <div class="modal-overlay" id="mStockTake" hidden>
+    <div class="modal m760 modal-tall" id="mStockTakeBox">
+      <h3>📋 جرد المخزون لكل مستودع - By Adel Samir - واتس: 01002655282</h3>
+      <div class="stk-top">
+        <label for="stkWarehouse">المستودع المراد جرده:</label>
+        <select id="stkWarehouse"></select>
+        <button id="btnStkReload" class="btn gray" type="button">🔄 إعادة تحميل</button>
+        <span id="stkSummary" class="stk-summary"></span>
+      </div>
+      <div class="stk-grid-wrap">
+        <table id="dgvStockTake" class="dgv">
+          <thead>
+            <tr>
+              <th style="width:18%">كود الصنف</th>
+              <th style="width:32%">اسم الصنف</th>
+              <th style="width:20%">العدد الفعلي على البرنامج</th>
+              <th style="width:15%">العدد المعدود</th>
+              <th style="width:15%">الفرق</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="modal-actions">
+        <button id="btnCloseStockTake" class="btn gray" type="button">إغلاق</button>
+        <button id="btnExportStockTake" class="btn green" type="button">📥 تصدير إلى Excel</button>
+        <button id="btnPrintStockTake" class="btn sky" type="button">🖨️ طباعة الجرد</button>
+        <button id="btnApplyStockTake" class="btn green" type="button">💾 اعتماد الجرد وتسوية الفروق</button>
+      </div>
+      <p class="stk-hint">✏️ اكتب «العدد المعدود» بجوار كل صنف عند الجرد الفعلي، وسيظهر «الفرق» تلقائياً، ثم اضغط اعتماد الجرد لتسوية الفروق وترحيل حركات الجرد. الأصناف التي تظل فارغة (أو مطابقة) لا تُسوّى لأن لا فرق فيها.</p>
     </div>
   </div>
 

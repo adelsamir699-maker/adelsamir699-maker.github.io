@@ -10,6 +10,12 @@
   /* ================== التخزين ================== */
   const LS_CUSTOMERS = "mizan_customers_v1";
   const LS_TXS = "mizan_txs_v1";
+  const LS_PRODUCTS = "mizan_products_v1";
+  const LS_ACTIVITY = "mizan_activity_v1";
+  const LS_SALES = "mizan_sales_v1";
+  const LS_TREASURY = "mizan_treasury_v1";
+
+  const TAX = { enabled: true, rate: 0.14 };
 
   /* ================== البيانات التجريبية ================== */
   const seedCustomers = [
@@ -44,24 +50,114 @@
     { id: 3, customerId: 4, date: "2026-08-01", desc: "رصيد افتتاحي (أول المدة)", debit: 1250.75, credit: 0 }
   ];
 
+  const seedProducts = [
+    { id: 1, code: "PRD-001", barcode: "6252025001231", nameAr: "لبن جهينة 1 لتر", nameEn: "Juhayna Milk 1L", category: "ألبان", unit: "عبوة", defaultWarehouse: "المخزن الرئيسي", purchasePrice: 32, weightedAvgCost: 32, salePrice: 37, discountPercent: 0, discountStart: "", discountEnd: "", qty: 120, reorder: 50, isActive: true },
+    { id: 2, code: "PRD-002", barcode: "6223002001534", nameAr: "عيش فينو", nameEn: "Fino Bread", category: "مخبوزات", unit: "حبة", defaultWarehouse: "المخزن الرئيسي", purchasePrice: 1.5, weightedAvgCost: 1.5, salePrice: 2, discountPercent: 0, discountStart: "", discountEnd: "", qty: 15, reorder: 40, isActive: true },
+    { id: 3, code: "PRD-003", barcode: "6221039717754", nameAr: "زيت عباد الشمس 1.5 لتر", nameEn: "Sunflower Oil 1.5L", category: "زيوت", unit: "عبوة", defaultWarehouse: "المخزن الرئيسي", purchasePrice: 90, weightedAvgCost: 90, salePrice: 100, discountPercent: 5, discountStart: "2026-09-01", discountEnd: "2026-09-30", qty: 8, reorder: 20, isActive: true },
+    { id: 4, code: "PRD-004", barcode: "6224001940157", nameAr: "سكر 1 كجم", nameEn: "Sugar 1Kg", category: "سكريات", unit: "كيس", defaultWarehouse: "المخزن الرئيسي", purchasePrice: 42, weightedAvgCost: 42, salePrice: 48, discountPercent: 0, discountStart: "", discountEnd: "", qty: 300, reorder: 60, isActive: true },
+    { id: 5, code: "PRD-005", barcode: "6222012000232", nameAr: "شاي العروسة", nameEn: "El Arosa Tea", category: "مشروبات", unit: "علبة", defaultWarehouse: "المخزن الرئيسي", purchasePrice: 85, weightedAvgCost: 85, salePrice: 95, discountPercent: 3, discountStart: "2026-09-10", discountEnd: "2026-09-20", qty: 12, reorder: 25, isActive: true }
+  ];
+
+  const CATEGORIES = ["عام", "ألبان", "مخبوزات", "زيوت", "سكريات", "مشروبات", "معلبات", "عصائر", "منظفات"];
+  const UNITS = ["حبة", "عبوة", "كيس", "علبة", "كارتون", "طبق", "كيلو", "لتر", "زجاجة"];
+  const WAREHOUSES = ["المخزن الرئيسي", "مخزن المنصورة", "مخزن الزقازيق"];
+
+  const seedActivity = [
+    { ts: "09:12:44", user: "admin", action: "تسجيل دخول", desc: "دخول مدير النظام" },
+    { ts: "09:30:10", user: "admin", action: "فاتورة مبيعات", desc: "فاتورة POS #INV-1001" },
+    { ts: "10:05:22", user: "admin", action: "تحصيل مديونية", desc: "دفعة من أحمد محمد السيد 500 ج.م" },
+    { ts: "11:40:05", user: "admin", action: "إضافة صنف", desc: "إضافة صنف جديد" },
+    { ts: "12:15:48", user: "admin", action: "فاتورة مشتريات", desc: "فاتورة مشتريات #PINV-2001" }
+  ];
+
+  const seedTreasury = [
+    { id: 1, name: "الصندوق الرئيسي (نقدي)", type: "cash", balance: 25000 },
+    { id: 2, name: "البنك الأهلي المصري (1234567890)", type: "bank", balance: 50000 },
+    { id: 3, name: "محفظة فودافون كاش (01002655282)", type: "wallet", balance: 10000 }
+  ];
+
   /* ================== الحالة ================== */
   let customers = [];
   let txs = [];
+  let products = [];
+  let activity = [];
+  let sales = [];
+  let treasury = [];
   let editingId = null;
 
   /* ================== أدوات ================== */
   const $ = (sel) => document.querySelector(sel);
 
+  function normalizeProduct(p) {
+    return Object.assign({
+      barcode: "",
+      nameEn: "",
+      category: "عام",
+      unit: "حبة",
+      defaultWarehouse: "المخزن الرئيسي",
+      purchasePrice: 0,
+      weightedAvgCost: 0,
+      salePrice: 0,
+      discountPercent: 0,
+      discountStart: "",
+      discountEnd: "",
+      qty: 0,
+      reorder: 50,
+      isActive: true
+    }, p);
+  }
+
   function loadData() {
     try {
       customers = JSON.parse(localStorage.getItem(LS_CUSTOMERS)) || seedCustomers;
       txs = JSON.parse(localStorage.getItem(LS_TXS)) || seedTxs;
+      products = (JSON.parse(localStorage.getItem(LS_PRODUCTS)) || []).map(normalizeProduct);
+      activity = JSON.parse(localStorage.getItem(LS_ACTIVITY)) || seedActivity;
+      sales = JSON.parse(localStorage.getItem(LS_SALES)) || [];
+      treasury = JSON.parse(localStorage.getItem(LS_TREASURY)) || seedTreasury;
     } catch (e) {
       customers = seedCustomers;
       txs = seedTxs;
+      products = seedProducts.map(normalizeProduct);
+      activity = seedActivity;
+      sales = [];
+      treasury = seedTreasury;
     }
     if (!localStorage.getItem(LS_CUSTOMERS)) saveCustomers();
     if (!localStorage.getItem(LS_TXS)) saveTxs();
+    if (!localStorage.getItem(LS_PRODUCTS)) saveProducts();
+    if (!localStorage.getItem(LS_ACTIVITY)) saveActivity();
+    if (!localStorage.getItem(LS_SALES)) saveSales();
+    if (!localStorage.getItem(LS_TREASURY)) saveTreasury();
+  }
+
+  function saveProducts() {
+    localStorage.setItem(LS_PRODUCTS, JSON.stringify(products));
+  }
+
+  function saveSales() {
+    localStorage.setItem(LS_SALES, JSON.stringify(sales));
+  }
+
+  function saveTreasury() {
+    localStorage.setItem(LS_TREASURY, JSON.stringify(treasury));
+  }
+
+  function saveActivity() {
+    localStorage.setItem(LS_ACTIVITY, JSON.stringify(activity));
+  }
+
+  function addActivity(action, desc) {
+    const d = new Date();
+    const p = (x) => String(x).padStart(2, "0");
+    activity.unshift({
+      ts: p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()),
+      user: "admin",
+      action: action,
+      desc: desc
+    });
+    if (activity.length > 200) activity.length = 200;
+    saveActivity();
   }
 
   function saveCustomers() {
@@ -122,6 +218,58 @@
 
   function hideModal(id) {
     $("#" + id).hidden = true;
+  }
+
+  /* ================== الروترة بين الشاشات ================== */
+  const BUILT_VIEWS = ["dashboard", "customers", "products"];
+
+  function showView(name) {
+    document.querySelectorAll(".view[data-id]").forEach((v) => {
+      v.hidden = v.dataset.id !== name;
+    });
+    document.querySelectorAll(".nav-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.view === name);
+    });
+    if (name === "dashboard") renderDashboard();
+    if (name === "customers") renderTable();
+    if (name === "products") renderProducts();
+  }
+
+  /* ================== لوحة التحكم ================== */
+  function renderDashboard() {
+    $("#kSales").textContent = fmt(8450.0) + " ج.م";
+    $("#kPurchases").textContent = fmt(3200.0) + " ج.م";
+    $("#kExpenses").textContent = fmt(450.0) + " ج.م";
+    $("#kProfit").textContent = fmt(1230.5) + " ج.م";
+    $("#kTreasury").textContent = fmt(25000.0) + " ج.م";
+
+    const low = products.filter((pr) => pr.qty <= pr.reorder);
+    $("#kLowStock").textContent = low.length.toString();
+
+    const tLow = $("#dgvLowStock tbody");
+    tLow.innerHTML = "";
+    low.forEach((pr) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td>' + esc(pr.code) + '</td>' +
+        '<td>' + esc(pr.nameAr) + '</td>' +
+        '<td>' + esc(pr.category) + '</td>' +
+        '<td>' + esc(Number(pr.qty).toLocaleString("en-US")) + '</td>' +
+        '<td>' + esc(Number(pr.reorder).toLocaleString("en-US")) + '</td>';
+      tLow.appendChild(tr);
+    });
+
+    const tAct = $("#dgvActivity tbody");
+    tAct.innerHTML = "";
+    activity.slice(0, 12).forEach((a) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td>' + esc(a.ts) + '</td>' +
+        '<td>' + esc(a.user) + '</td>' +
+        '<td>' + esc(a.action) + '</td>' +
+        '<td style="text-align:right">' + esc(a.desc) + '</td>';
+      tAct.appendChild(tr);
+    });
   }
 
   /* ================== الجدول ================== */
@@ -252,12 +400,6 @@
   }
 
   /* ================== نافذة: تحصيل مديونية ================== */
-  const TREASURIES = {
-    cash: [{ id: 1, label: "الصندوق الرئيسي (نقدي)" }],
-    bank: [{ id: 2, label: "البنك الأهلي المصري (1234567890)" }],
-    wallet: [{ id: 3, label: "محفظة فودافون كاش (01002655282)" }]
-  };
-
   let payPreselected = null;
 
   function openPayDebt(customer) {
@@ -283,13 +425,13 @@
 
   function applyTreasuryFilter() {
     const method = $("#pMethod").value;
-    const list = method.includes("بنكي") ? TREASURIES.bank : method.includes("محفظة") ? TREASURIES.wallet : TREASURIES.cash;
+    const type = method.includes("بنكي") ? "bank" : method.includes("محفظة") ? "wallet" : "cash";
     const sel = $("#pTreasury");
     sel.innerHTML = "";
-    list.forEach((t) => {
+    treasury.filter((t) => t.type === type).forEach((t) => {
       const opt = document.createElement("option");
       opt.value = t.id;
-      opt.textContent = t.label;
+      opt.textContent = t.name;
       sel.appendChild(opt);
     });
   }
@@ -333,6 +475,12 @@
 
     const cust = customers.find((c) => c.id === cid);
     cust.currentBalance = Math.round((cust.currentBalance - amount) * 100) / 100;
+    const trId = parseInt($("#pTreasury").value, 10);
+    const tr = treasury.find((x) => x.id === trId);
+    if (tr) {
+      tr.balance = Math.round((tr.balance + amount) * 100) / 100;
+      saveTreasury();
+    }
     txs.push({
       id: nextTxId(),
       customerId: cid,
@@ -437,6 +585,348 @@
     window.print();
   }
 
+  /* ================== شاشة الأصناف والمخزون ================== */
+  let editingProductId = null;
+
+  function nextProductId() {
+    return products.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+  }
+
+  function nextProductCode() {
+    let max = 0;
+    products.forEach((p) => {
+      const m = /^PRD-(\d+)$/.exec(p.code || "");
+      if (m) max = Math.max(max, +m[1]);
+    });
+    return "PRD-" + String(max + 1).padStart(4, "0");
+  }
+
+  function productCategories() {
+    const set = new Set(products.map((p) => p.category).filter(Boolean));
+    CATEGORIES.concat([...set]).forEach((c) => set.add(c));
+    return [...set];
+  }
+
+  function fillSelect(sel, items, selected) {
+    const el = $(sel);
+    el.innerHTML = "";
+    items.forEach((v) => {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = v;
+      el.appendChild(opt);
+    });
+    if (selected != null) el.value = selected;
+  }
+
+  function discountStatusText(p) {
+    const pct = Number(p.discountPercent) || 0;
+    if (pct <= 0) return "بدون خصم";
+    if (p.discountStart && p.discountEnd) {
+      const now = new Date();
+      const s = new Date(p.discountStart + "T00:00:00");
+      const e = new Date(p.discountEnd + "T00:00:00");
+      if (now >= s && now <= e) return pct + " % (نشط)";
+      return pct + " %";
+    }
+    return pct + " %";
+  }
+
+  function renderProducts() {
+    fillSelect("#cmbProductCategory", ["الكل"].concat(productCategories()), $("#cmbProductCategory").value || "الكل");
+
+    const q = normalizeAr($("#txtProductSearch").value);
+    const cat = $("#cmbProductCategory").value;
+    const tbody = $("#dgvProducts tbody");
+    tbody.innerHTML = "";
+
+    const filtered = products.filter((p) => {
+      if (cat !== "الكل" && p.category !== cat) return false;
+      if (!q) return true;
+      return (
+        normalizeAr(p.code).includes(q) ||
+        normalizeAr(p.barcode || "").includes(q) ||
+        normalizeAr(p.nameAr).includes(q) ||
+        normalizeAr(p.nameEn || "").includes(q) ||
+        normalizeAr(p.category).includes(q) ||
+        normalizeAr(p.unit).includes(q) ||
+        normalizeAr(p.defaultWarehouse).includes(q) ||
+        Number(p.purchasePrice || 0).toString().includes(q) ||
+        Number(p.weightedAvgCost || 0).toString().includes(q) ||
+        Number(p.salePrice || 0).toString().includes(q) ||
+        (p.isActive ? "نشط" : "معطل").includes(q)
+      );
+    });
+
+    filtered.forEach((p) => {
+      const tr = document.createElement("tr");
+      const disc = discountStatusText(p);
+      const discBadge = p.discountPercent > 0
+        ? '<span class="badge badge-discount">' + esc(disc) + '</span>'
+        : '<span class="badge badge-none">' + esc(disc) + '</span>';
+      const stBadge = p.isActive
+        ? '<span class="badge badge-active">نشط 🟢</span>'
+        : '<span class="badge badge-inactive">معطل 🔴</span>';
+      tr.innerHTML =
+        '<td>' + esc(p.code) + '</td>' +
+        '<td>' + esc(p.barcode || "-") + '</td>' +
+        '<td>' + esc(p.nameAr) + '</td>' +
+        '<td>' + esc(p.category) + '</td>' +
+        '<td>' + esc(p.unit) + '</td>' +
+        '<td>' + esc(Number(p.qty).toLocaleString("en-US")) + '</td>' +
+        '<td>' + fmt(p.purchasePrice) + '</td>' +
+        '<td>' + fmt(p.weightedAvgCost) + '</td>' +
+        '<td>' + fmt(p.salePrice) + '</td>' +
+        '<td>' + discBadge + '</td>' +
+        '<td>' + stBadge + '</td>' +
+        '<td class="cell-actions"><button class="btn small blue" type="button" data-action="edit">✏️ تعديل</button></td>';
+      tr.dataset.id = p.id;
+      tr.querySelector('[data-action="edit"]').addEventListener("click", () => openProductDialog(p));
+      tr.addEventListener("dblclick", () => openProductDialog(p));
+      tbody.appendChild(tr);
+    });
+  }
+
+  /* ---- نافذة إضافة / تعديل صنف ---- */
+  function openProductDialog(product) {
+    editingProductId = product ? product.id : null;
+    fillSelect("#fPCategory", productCategories(), product ? product.category : CATEGORIES[0]);
+    fillSelect("#fPUnit", UNITS, product ? product.unit : UNITS[0]);
+    fillSelect("#fPWarehouse", WAREHOUSES, product ? product.defaultWarehouse : WAREHOUSES[0]);
+
+    if (product) {
+      $("#productModalTitle").textContent = "✏️ تعديل صنف (" + product.nameAr + ")";
+      $("#btnSaveProduct").textContent = "💾 حفظ التعديلات";
+      $("#fPCode").value = product.code;
+      $("#fPCode").disabled = true;
+      $("#fPBarcode").value = product.barcode || "";
+      $("#fPNameAr").value = product.nameAr;
+      $("#fPNameEn").value = product.nameEn || "";
+      $("#fPPurchase").value = fmt(product.purchasePrice);
+      $("#fPSale").value = fmt(product.salePrice);
+      $("#fPStock").value = Number(product.qty).toLocaleString("en-US");
+      $("#fPStock").disabled = true;
+      $("#fPDiscount").value = Number(product.discountPercent || 0).toLocaleString("en-US");
+      $("#fPDiscStart").value = product.discountStart || "";
+      $("#fPDiscEnd").value = product.discountEnd || "";
+      $("#fPStatus").value = product.isActive ? "1" : "0";
+    } else {
+      $("#productModalTitle").textContent = "➕ إضافة صنف جديد للمخزن";
+      $("#btnSaveProduct").textContent = "💾 حفظ الصنف";
+      $("#fPCode").value = nextProductCode();
+      $("#fPCode").disabled = false;
+      $("#fPBarcode").value = "";
+      $("#fPNameAr").value = "";
+      $("#fPNameEn").value = "";
+      $("#fPPurchase").value = "0.00";
+      $("#fPSale").value = "0.00";
+      $("#fPStock").value = "0";
+      $("#fPStock").disabled = false;
+      $("#fPDiscount").value = "0";
+      $("#fPDiscStart").value = "";
+      $("#fPDiscEnd").value = "";
+      $("#fPStatus").value = "1";
+    }
+    showModal("mProduct");
+    $("#fPNameAr").focus();
+  }
+
+  function saveProduct() {
+    const nameAr = $("#fPNameAr").value.trim();
+    if (!nameAr) {
+      toast("يرجى كتابة اسم الصنف بالعربية.", "warning");
+      return;
+    }
+    const category = $("#fPCategory").value;
+    const unit = $("#fPUnit").value;
+    if (!category) {
+      toast("يرجى اختيار تصنيف الصنف (التصنيف إجباري).", "warning");
+      return;
+    }
+    if (!unit) {
+      toast("يرجى اختيار وحدة قياس للصنف (إجبارية).", "warning");
+      return;
+    }
+
+    const dStart = $("#fPDiscStart").value;
+    const dEnd = $("#fPDiscEnd").value;
+    if (dStart && dEnd && dStart > dEnd) {
+      toast("تاريخ نهاية فترة الخصم لا يمكن أن يكون سابقاً لتاريخ البداية.", "warning");
+      return;
+    }
+
+    const purchase = parseFloat($("#fPPurchase").value) || 0;
+    const sale = parseFloat($("#fPSale").value) || 0;
+    const opening = parseFloat(String($("#fPStock").value).replace(/,/g, "")) || 0;
+    const discount = parseFloat($("#fPDiscount").value) || 0;
+    const status = $("#fPStatus").value === "1";
+
+    if (editingProductId == null) {
+      const pr = {
+        id: nextProductId(),
+        code: $("#fPCode").value.trim(),
+        barcode: $("#fPBarcode").value.trim() || "",
+        nameAr: nameAr,
+        nameEn: $("#fPNameEn").value.trim(),
+        category: category,
+        unit: unit,
+        defaultWarehouse: $("#fPWarehouse").value || WAREHOUSES[0],
+        purchasePrice: purchase,
+        weightedAvgCost: purchase,
+        salePrice: sale,
+        discountPercent: discount,
+        discountStart: dStart,
+        discountEnd: dEnd,
+        qty: opening,
+        reorder: 50,
+        isActive: status
+      };
+      products.push(pr);
+      saveProducts();
+      addActivity("إضافة صنف", "إضافة صنف جديد: " + pr.nameAr + " (" + pr.code + ")");
+      toast("تمت إضافة الصنف بنجاح.", "success");
+    } else {
+      const pr = products.find((p) => p.id === editingProductId);
+      pr.barcode = $("#fPBarcode").value.trim() || "";
+      pr.nameAr = nameAr;
+      pr.nameEn = $("#fPNameEn").value.trim();
+      pr.category = category;
+      pr.unit = unit;
+      pr.defaultWarehouse = $("#fPWarehouse").value || pr.defaultWarehouse;
+      pr.purchasePrice = purchase;
+      pr.salePrice = sale;
+      pr.discountPercent = discount;
+      pr.discountStart = dStart;
+      pr.discountEnd = dEnd;
+      pr.isActive = status;
+      saveProducts();
+      addActivity("تعديل صنف", "تعديل بيانات الصنف: " + pr.nameAr + " (" + pr.code + ")");
+      toast("تم حفظ تعديلات الصنف بنجاح.", "success");
+    }
+    hideModal("mProduct");
+    renderProducts();
+  }
+
+  /* ---- جرد المخزون لكل مستودع ---- */
+  function openStockTake() {
+    fillSelect("#stkWarehouse", WAREHOUSES, WAREHOUSES[0]);
+    renderStockTake();
+    showModal("mStockTake");
+  }
+
+  function renderStockTake() {
+    const wh = $("#stkWarehouse").value;
+    const tbody = $("#dgvStockTake tbody");
+    tbody.innerHTML = "";
+    const lines = products.filter((p) => p.defaultWarehouse === wh || p.defaultWarehouse === WAREHOUSES[0]);
+    lines.forEach((p) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td>' + esc(p.code) + '</td>' +
+        '<td>' + esc(p.nameAr) + '</td>' +
+        '<td>' + esc(Number(p.qty).toLocaleString("en-US")) + '</td>' +
+        '<td><input class="stk-qty-input" type="text" data-id="' + p.id + '" autocomplete="off" /></td>' +
+        '<td class="stk-diff diff-zero">-</td>';
+      tbody.appendChild(tr);
+    });
+    $("#stkSummary").textContent = "إجمالي عدد الأصناف: " + lines.length.toLocaleString("en-US");
+  }
+
+  function computeStockDiff(inputEl) {
+    const tr = inputEl.closest("tr");
+    const sysCell = tr.cells[2];
+    const diffCell = tr.cells[4];
+    const sys = parseFloat(String(sysCell.textContent).replace(/,/g, "")) || 0;
+    const act = parseFloat(inputEl.value.replace(/,/g, ""));
+    if (isNaN(act)) {
+      diffCell.textContent = "-";
+      diffCell.className = "stk-diff diff-zero";
+      return;
+    }
+    const diff = Math.round((act - sys) * 100) / 100;
+    diffCell.textContent = Number(diff).toLocaleString("en-US");
+    diffCell.className = "stk-diff " + (diff > 0 ? "diff-pos" : diff < 0 ? "diff-neg" : "diff-zero");
+  }
+
+  function saveStockTake() {
+    const wh = $("#stkWarehouse").value;
+    const rows = $("#dgvStockTake tbody").querySelectorAll("tr");
+    const items = [];
+    rows.forEach((tr) => {
+      const inp = tr.querySelector(".stk-qty-input");
+      const pid = parseInt(inp.dataset.id, 10);
+      const sys = parseFloat(String(tr.cells[2].textContent).replace(/,/g, "")) || 0;
+      const act = parseFloat(inp.value.replace(/,/g, ""));
+      if (isNaN(act)) return;
+      if (Math.abs(act - sys) >= 0.0001) items.push({ id: pid, qty: act });
+    });
+
+    if (items.length === 0) {
+      toast("لم يُدخَل أي «عدد معدود» مختلف عن رصيد النظام بعد، وعليه لم تتم أي تسوية.", "warning");
+      return;
+    }
+
+    if (!confirm("سيتم اعتماد جرد مخزن (" + wh + ") وتسوية فروق عدد (" + items.length + ") صنف.\n\nهل أنت متأكد من المتابعة؟")) return;
+
+    items.forEach((it) => {
+      const pr = products.find((p) => p.id === it.id);
+      if (pr) {
+        pr.qty = it.qty;
+        pr.weightedAvgCost = pr.weightedAvgCost || pr.purchasePrice;
+      }
+    });
+    saveProducts();
+    addActivity("اعتماد جرد", "جرد مخزن (" + wh + ") وتسوية " + items.length + " صنف");
+    hideModal("mStockTake");
+    toast("تم اعتماد الجرد وتسوية الفروق بنجاح.", "success");
+    renderProducts();
+  }
+
+  function exportStockTakeCSV() {
+    const rows = $("#dgvStockTake tbody").querySelectorAll("tr");
+    if (rows.length === 0) {
+      toast("لا توجد أصناف للتصدير.", "warning");
+      return;
+    }
+    const lines = [];
+    lines.push("كود الصنف,اسم الصنف,العدد الفعلي على البرنامج,العدد المعدود,الفرق");
+    rows.forEach((tr) => {
+      const q = (s) => '"' + String(s || "").replace(/"/g, '""') + '"';
+      lines.push([q(tr.cells[0].textContent), q(tr.cells[1].textContent), tr.cells[2].textContent, q(tr.querySelector(".stk-qty-input").value || ""), tr.cells[4].textContent].join(","));
+    });
+    const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "جرد_مخزون_" + Date.now() + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    toast("تم تصدير جدول الجرد إلى CSV (يفتح في Excel).", "success");
+  }
+
+  function printStockTake() {
+    const rows = $("#dgvStockTake tbody").querySelectorAll("tr");
+    const wh = $("#stkWarehouse").value;
+    $("#skWh").textContent = wh;
+    const p = (x) => String(x).padStart(2, "0");
+    const d = new Date();
+    $("#skDate").textContent = d.getFullYear() + "/" + p(d.getMonth() + 1) + "/" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+    $("#skCount").textContent = rows.length.toLocaleString("en-US");
+    const tb = $("#skBody");
+    tb.innerHTML = "";
+    rows.forEach((tr) => {
+      const tr2 = document.createElement("tr");
+      tr2.innerHTML =
+        '<td>' + esc(tr.cells[0].textContent) + '</td>' +
+        '<td>' + esc(tr.cells[1].textContent) + '</td>' +
+        '<td>' + esc(tr.cells[2].textContent) + '</td>' +
+        '<td>' + esc(tr.querySelector(".stk-qty-input").value || "") + '</td>' +
+        '<td>' + esc(tr.cells[4].textContent) + '</td>';
+      tb.appendChild(tr2);
+    });
+    window.print();
+  }
+
   /* ================== الساعة ================== */
   function tickClock() {
     const d = new Date();
@@ -453,7 +943,9 @@
     loadData();
     tickClock();
     setInterval(tickClock, 1000);
-    renderTable();
+    showView("dashboard");
+
+    $("#btnRefresh").addEventListener("click", renderDashboard);
 
     $("#btnAddCustomer").addEventListener("click", () => openAddEdit(null));
     $("#btnPayCustDebt").addEventListener("click", () => openPayDebt(null));
@@ -511,6 +1003,25 @@
     });
     $("#btnCloseStmt").addEventListener("click", () => hideModal("mStatement"));
 
+    $("#btnAddProduct").addEventListener("click", () => openProductDialog(null));
+    $("#btnStockTake").addEventListener("click", openStockTake);
+    $("#btnRefreshProducts").addEventListener("click", renderProducts);
+    $("#txtProductSearch").addEventListener("input", renderProducts);
+    $("#cmbProductCategory").addEventListener("change", renderProducts);
+
+    $("#btnSaveProduct").addEventListener("click", saveProduct);
+    $("#btnCancelProduct").addEventListener("click", () => hideModal("mProduct"));
+
+    $("#stkWarehouse").addEventListener("change", renderStockTake);
+    $("#btnStkReload").addEventListener("click", renderStockTake);
+    $("#btnApplyStockTake").addEventListener("click", saveStockTake);
+    $("#btnCloseStockTake").addEventListener("click", () => hideModal("mStockTake"));
+    $("#btnExportStockTake").addEventListener("click", exportStockTakeCSV);
+    $("#btnPrintStockTake").addEventListener("click", printStockTake);
+    $("#dgvStockTake tbody").addEventListener("input", (e) => {
+      if (e.target.classList.contains("stk-qty-input")) computeStockDiff(e.target);
+    });
+
     document.querySelectorAll(".modal-overlay").forEach((ov) => {
       ov.addEventListener("click", (e) => {
         if (e.target === ov) ov.hidden = true;
@@ -519,8 +1030,12 @@
 
     document.querySelectorAll(".nav-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
-        if (btn.classList.contains("active")) return;
-        toast("هذه الشاشة قيد التطوير 🚧 - ستصل قريبًا.", "info");
+        const name = btn.dataset.view;
+        if (BUILT_VIEWS.includes(name)) {
+          showView(name);
+        } else {
+          toast("شاشة «" + btn.textContent.trim() + "» قيد التطوير 🚧 - ستصل قريبًا.", "info");
+        }
       });
     });
 

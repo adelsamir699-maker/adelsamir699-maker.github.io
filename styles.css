@@ -148,6 +148,60 @@ body {
 .btn.light  { background: #F1F5F9; color: var(--text-secondary); }
 .btn.light:hover { background: #E2E8F0; }
 
+.view[hidden] { display: none !important; }
+
+/* ===== لوحة التحكم ===== */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.kpi-card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-right: 5px solid var(--accent);
+  padding: 12px 14px;
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+}
+
+.kpi-title { color: var(--text-secondary); font-size: 12px; }
+.kpi-value { color: var(--text-primary); font-size: 16px; white-space: nowrap; }
+
+.tables-row {
+  display: flex;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+
+.data-panel {
+  flex: 1;
+  background: #fff;
+  border: 1px solid var(--border);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.panel-title { color: var(--primary-dark); font-size: 14px; margin-bottom: 10px; }
+.data-panel .table-wrap { border: none; }
+
+@media (max-width: 1100px) {
+  .kpi-row { grid-template-columns: repeat(3, 1fr); }
+  .tables-row { flex-direction: column; }
+}
+
+@media (max-width: 620px) {
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+}
+
 /* ===== شريط البحث (46px) ===== */
 .search-bar {
   background: #F8FAFC;
@@ -392,3 +446,91 @@ body {
   .modal { min-width: 0; width: 96vw; }
   .act-btns { grid-template-columns: 1fr; }
 }
+
+/* ===== شاشة الأصناف والمخزون ===== */
+.btn.orange { background: var(--warning); }
+.btn.orange:hover { background: #D97706; }
+
+.btn.small { padding: 6px 10px; font-size: 12px; }
+
+.filter-select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  background: #fff;
+  min-width: 140px;
+}
+
+.filter-select:focus { outline: 2px solid var(--sidebar-active); }
+.filter-label { color: var(--text-secondary); font-size: 13px; }
+
+.dgv tbody .cell-actions { text-align: center; }
+.dgv tbody .badge {
+  display: inline-block;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: bold;
+}
+.badge-active { background: #D1FAE5; color: #047857; }
+.badge-inactive { background: #FEE2E2; color: #B91C1C; }
+.badge-discount { background: #FEF3C7; color: #B45309; }
+.badge-none { background: #F1F5F9; color: #64748B; }
+
+/* ===== نافذة إضافة / تعديل صنف ===== */
+.form-grid-scroll { max-height: 60vh; overflow-y: auto; padding-left: 4px; }
+
+.modal.m760 { width: 820px; }
+
+/* ===== نافذة جرد المخزون ===== */
+.stk-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.stk-top select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  background: #fff;
+  min-width: 220px;
+}
+
+.stk-summary { color: var(--primary-dark); font-weight: bold; }
+
+.stk-grid-wrap {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+
+.stk-qty-input {
+  width: 90px;
+  padding: 5px 8px;
+  text-align: center;
+  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.stk-qty-input:focus { outline: 2px solid var(--sidebar-active); }
+
+.stk-hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-top: 12px;
+  line-height: 1.6;
+}
+
+.diff-pos { color: var(--success); font-weight: bold; }
+.diff-neg { color: var(--danger); font-weight: bold; }
+.diff-zero { color: var(--text-muted); }
