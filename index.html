@@ -190,6 +190,84 @@
 
       </section>
 
+      <!-- ===== شاشة فواتير المشتريات والتوريد ===== -->
+      <section class="view view-purchases" id="viewPurchases" data-id="purchases" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnPQuickAddProduct" class="btn teal" type="button">➕ إضافة صنف جديد للمخزن</button>
+            <button id="btnPQuickAddSupp" class="btn orange" type="button">➕ إضافة مورد جديد</button>
+          </div>
+          <h1 class="view-title">📦 شاشة فواتير المشتريات والتوريد (مع حساب متوسط التكلفة المرجح) - By Adel Samir - واتس: 01002655282</h1>
+        </div>
+
+        <div class="pos-fields">
+          <div class="pos-row">
+            <div class="fld"><label>رقم الفاتورة:</label><input id="txtPInvNo" class="ro" readonly /></div>
+            <div class="fld"><label>التاريخ:</label><input id="dtpPDate" type="date" /></div>
+            <div class="fld grow"><label>المورد:</label><select id="cmbPosSupplier"></select></div>
+            <div class="fld"><label>الدفع:</label>
+              <select id="cmbPPaymentMethod">
+                <option>نقداً</option><option>آجل</option><option>تحويل بنكي</option><option>محافظ إلكترونية</option>
+              </select>
+            </div>
+            <div class="fld" id="fldPPBank" hidden><label>البنك المُحول منه:</label><select id="cmbPPBank"></select></div>
+            <div class="fld" id="fldPPWallet" hidden><label>المحفظة الإلكترونية:</label><select id="cmbPPWallet"></select></div>
+            <div class="fld"><label>المستودع:</label><select id="cmbPPWarehouse"></select></div>
+          </div>
+
+          <div class="pos-row">
+            <div class="fld grow"><label class="lbl-accent">🔍 اكتب اسم الصنف أو الكود ثم Enter:</label>
+              <input id="txtPPSearch" autocomplete="off" list="ppProductsList" />
+              <datalist id="ppProductsList"></datalist>
+            </div>
+            <div class="fld grow2"><label>📋 أو اختر من قائمة أصناف المخزن:</label><select id="cmbPPPicker"></select></div>
+            <div class="fld"><label>الكمية:</label><input id="numPPQty" type="text" value="1" /></div>
+            <div class="fld"><label>سعر الشراء:</label><input id="txtPPPrice" type="text" /></div>
+            <div class="fld fld-btn"><button id="btnPPAdd" class="btn sky" type="button">إضافة ➕</button></div>
+            <div class="stock-badge" id="pStockBadge">
+              <div class="sb-title">📦 رصيد الصنف</div>
+              <div class="sb-line" id="sbPName">—</div>
+              <div class="sb-line" id="sbPQty">الرصيد: -</div>
+              <div class="sb-line" id="sbPPrice">سعر الشراء: -</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table id="dgvPItems" class="dgv">
+            <thead>
+              <tr>
+                <th style="width:8%">كود الصنف</th>
+                <th style="width:24%">اسم الصنف والمنتج</th>
+                <th style="width:6%">الوحدة</th>
+                <th style="width:8%">الكمية</th>
+                <th style="width:11%">السعر (قبل الضريبة)</th>
+                <th style="width:8%">الخصم</th>
+                <th style="width:11%">الضريبة (14%)</th>
+                <th style="width:14%">الإجمالي شامل الضريبة</th>
+                <th style="width:6%">حذف</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="pos-footer">
+          <div class="pos-foot-row">
+            <span id="lblPPSubTotal" class="ft-sub">المجموع: 0.00 ج.م</span>
+            <span class="fld-inline"><label>خصم إضافي:</label><input id="txtPPDiscount" type="text" value="0" /></span>
+            <span id="lblPPTax" class="ft-tax">ضريبة المبيعات (14%): 0.00 ج.م</span>
+          </div>
+          <div class="pos-foot-row">
+            <span id="lblPPTotal" class="ft-total">الصافي النهائي: 0.00 ج.م</span>
+            <button id="btnPPSave" class="btn green" type="button">💾 حفظ الفاتورة والترحيل</button>
+            <button id="btnPPNew" class="btn dark" type="button">📄 فاتورة جديدة</button>
+          </div>
+        </div>
+
+      </section>
+
       <!-- ===== شاشة دليل العملاء ===== -->
       <section class="view view-customers" id="viewCustomers" data-id="customers" hidden>
 
@@ -275,6 +353,488 @@
 
       </section>
 
+      <!-- ===== شاشة دليل الموردين ===== -->
+      <section class="view view-suppliers" id="viewSuppliers" data-id="suppliers" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnAddSupplier" class="btn orange" type="button">➕ إضافة مورد جديد</button>
+            <button id="btnPaySuppDebt" class="btn green" type="button">💵 سداد مستحقات مورد</button>
+          </div>
+          <h1 class="view-title">📦 دليل الموردين والمستحق عليهم</h1>
+        </div>
+
+        <div class="search-bar">
+          <input type="text" id="txtSupplierSearch" class="search-input" autocomplete="new-search" />
+          <label class="search-label" for="txtSupplierSearch">🔍 بحث شامل في الموردين (كود، اسم، هاتف، محفظة، عنوان، ملاحظات، رصيد):</label>
+        </div>
+
+        <div class="table-wrap">
+          <table id="dgvSuppliers" class="dgv">
+            <thead>
+              <tr>
+                <th hidden>المعرف</th>
+                <th style="width:9%">كود المورد</th>
+                <th style="width:26%">اسم المورد</th>
+                <th style="width:13%">رقم الهاتف</th>
+                <th style="width:16%">المحفظة الإلكترونية</th>
+                <th style="width:22%">العنوان</th>
+                <th style="width:14%">الرصيد الحالي (المستحق)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+      </section>
+
+      <!-- ===== شاشة استعلام عن الفواتير ===== -->
+      <section class="view view-returns" id="viewReturns" data-id="returns" hidden>
+
+        <div class="view-header">
+          <button id="btnRefreshInvoices" class="btn gray" type="button">تحديث البيانات 🔄</button>
+          <h1 class="view-title">🔍 استعلام عن فواتير المبيعات والمشتريات (طباعة ومراجعة)</h1>
+        </div>
+
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="s">🛍️ فواتير المبيعات</button>
+          <button class="tab-btn" data-tab="p">📦 فواتير المشتريات</button>
+        </div>
+
+        <div id="tabS">
+          <div class="search-bar">
+            <label class="filter-label" for="dtpFromS">من:</label>
+            <input type="date" id="dtpFromS" class="filter-select" />
+            <label class="filter-label" for="dtpToS">إلى:</label>
+            <input type="date" id="dtpToS" class="filter-select" />
+            <input type="text" id="txtSearchInvS" class="search-input" autocomplete="new-search" />
+            <label class="search-label" for="txtSearchInvS">🔍 بحث (رقم، عميل، دفع، مبلغ):</label>
+          </div>
+          <div class="table-wrap">
+            <table id="dgvInvS" class="dgv">
+              <thead>
+                <tr>
+                  <th hidden>المعرف</th>
+                  <th style="width:14%">رقم الفاتورة</th>
+                  <th style="width:11%">التاريخ</th>
+                  <th style="width:28%">العميل</th>
+                  <th style="width:14%">الإجمالي</th>
+                  <th style="width:12%">الدفع</th>
+                  <th style="width:21%">طباعة / خيارات</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="tabP" hidden>
+          <div class="search-bar">
+            <label class="filter-label" for="dtpFromP">من:</label>
+            <input type="date" id="dtpFromP" class="filter-select" />
+            <label class="filter-label" for="dtpToP">إلى:</label>
+            <input type="date" id="dtpToP" class="filter-select" />
+            <input type="text" id="txtSearchInvP" class="search-input" autocomplete="new-search" />
+            <label class="search-label" for="txtSearchInvP">🔍 بحث (رقم، مورد، دفع، مبلغ):</label>
+          </div>
+          <div class="table-wrap">
+            <table id="dgvInvP" class="dgv">
+              <thead>
+                <tr>
+                  <th hidden>المعرف</th>
+                  <th style="width:14%">رقم الفاتورة</th>
+                  <th style="width:11%">التاريخ</th>
+                  <th style="width:28%">المورد</th>
+                  <th style="width:14%">الإجمالي</th>
+                  <th style="width:12%">الدفع</th>
+                  <th style="width:21%">طباعة / خيارات</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ===== شاشة الخزينة والمصروفات ===== -->
+      <section class="view view-treasury" id="viewTreasury" data-id="treasury" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnAddTreasury" class="btn blue" type="button">➕ إضافة خزينة / حساب</button>
+            <button id="btnVoucherIn" class="btn green" type="button">➕ سند قبض (إيراد)</button>
+            <button id="btnVoucherOut" class="btn red" type="button">➖ سند صرف (مصروف)</button>
+          </div>
+          <h1 class="view-title">💵 الخزينة والمصروفات وسندات القبض والصرف</h1>
+        </div>
+
+        <div class="search-bar">
+          <label class="filter-label" for="txtTreSearch">🔍 بحث في الخزائن والحركات:</label>
+          <input type="text" id="txtTreSearch" class="search-input" autocomplete="new-search" />
+        </div>
+
+        <div class="table-wrap">
+          <table id="dgvTreasury" class="dgv">
+            <thead>
+              <tr>
+                <th hidden>المعرف</th>
+                <th style="width:18%">اسم الخزينة / الحساب</th>
+                <th style="width:12%">النوع</th>
+                <th style="width:22%">رقم الحساب / المحفظة</th>
+                <th style="width:14%">الرصيد الحالي</th>
+                <th style="width:14%">إجمالي الوارد</th>
+                <th style="width:14%">إجمالي المنصرف</th>
+                <th style="width:6%">تعديل</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="data-panel">
+          <div class="panel-title">📋 آخر الحركات (وارد / منصرف)</div>
+          <div class="table-wrap">
+            <table id="dgvTreMoves" class="dgv">
+              <thead>
+                <tr>
+                  <th>التاريخ</th><th>الخزينة</th><th>البيان</th><th>وارد (ج.م)</th><th>منصرف (ج.م)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ===== شاشة دليل الحسابات ===== -->
+      <section class="view view-accounts" id="viewAccounts" data-id="accounts" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnAddAccount" class="btn blue" type="button">➕ إضافة حساب</button>
+          </div>
+          <h1 class="view-title">💰 دليل الحسابات (شجرة الحسابات)</h1>
+        </div>
+
+        <div class="search-bar">
+          <input type="text" id="txtAccountSearch" class="search-input" autocomplete="new-search" />
+          <label class="search-label" for="txtAccountSearch">🔍 بحث في الحسابات (كود، اسم، نوع):</label>
+        </div>
+
+        <div class="table-wrap">
+          <table id="dgvAccounts" class="dgv">
+            <thead>
+              <tr>
+                <th hidden>المعرف</th>
+                <th style="width:12%">الكود</th>
+                <th style="width:30%">اسم الحساب</th>
+                <th style="width:18%">النوع</th>
+                <th style="width:14%">الحساب الأب</th>
+                <th style="width:12%">رصيد افتتاحي</th>
+                <th style="width:14%">الحالة</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="stk-hint">💡 رصيد افتتاحي «مدين» يُكتب بالموجب، والحسابات الدائنة (موردين، رأس مال) تُكتب بالسالب تلقائيًا حسب النوع.</p>
+
+      </section>
+
+      <!-- ===== شاشة القيود اليومية ===== -->
+      <section class="view view-journal" id="viewJournal" data-id="journal" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnAddJournal" class="btn blue" type="button">➕ قيد جديد</button>
+          </div>
+          <h1 class="view-title">📝 القيود اليومية (المبيعات والمشتريات العامة)</h1>
+        </div>
+
+        <div class="search-bar">
+          <label class="filter-label" for="txtJournalSearch">🔍 بحث في القيود:</label>
+          <input type="text" id="txtJournalSearch" class="search-input" autocomplete="new-search" />
+        </div>
+
+        <div class="table-wrap">
+          <table id="dgvJournal" class="dgv">
+            <thead>
+              <tr>
+                <th hidden>المعرف</th>
+                <th style="width:12%">رقم القيد</th>
+                <th style="width:12%">التاريخ</th>
+                <th style="width:34%">البيان</th>
+                <th style="width:14%">المديون (ج.م)</th>
+                <th style="width:14%">الدائن (ج.م)</th>
+                <th style="width:14%">مرجع</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+      </section>
+
+      <!-- ===== شاشة قائمة المركز المالي ===== -->
+      <section class="view view-balance" id="viewBalance" data-id="balance" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnRefreshBalance" class="btn gray" type="button">تحديث 🔄</button>
+            <button id="btnPrintBalance" class="btn sky" type="button">🖨️ طباعة المركز المالي</button>
+          </div>
+          <h1 class="view-title">⚖️ قائمة المركز المالي حتى تاريخ: <span id="balDate"></span></h1>
+        </div>
+
+        <div class="bal-grid">
+          <div class="data-panel">
+            <div class="panel-title">💰 الأصول</div>
+            <table id="dgvBalAssets" class="dgv stmt-table">
+              <thead><tr><th>البند</th><th>القيمة (ج.م)</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="data-panel">
+            <div class="panel-title">📉 الالتزامات وحقوق الملكية</div>
+            <table id="dgvBalLiab" class="dgv stmt-table">
+              <thead><tr><th>البند</th><th>القيمة (ج.م)</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="pos-footer">
+          <div class="pos-foot-row">
+            <span id="balResult" class="ft-total">النتيجة: متوازن ✓</span>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ===== شاشة كشوف حسابات الخزائن ===== -->
+      <section class="view view-treasuryStatements" id="viewTreasuryStatements" data-id="treasuryStatements" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnPrintTreStmt" class="btn sky" type="button">🖨️ طباعة الكشف</button>
+          </div>
+          <h1 class="view-title">📑 كشف حساب الخزينة</h1>
+        </div>
+
+        <div class="search-bar">
+          <label class="filter-label" for="cmbTreStmt">الخزينة:</label>
+          <select id="cmbTreStmt" class="filter-select"></select>
+          <span id="treStmtBal" class="stk-summary"></span>
+        </div>
+
+        <div class="table-wrap">
+          <table id="dgvTreStmt" class="dgv stmt-table">
+            <thead>
+              <tr>
+                <th>التاريخ</th><th>البيان</th><th>وارد (ج.م)</th><th>منصرف (ج.م)</th><th>الرصيد (ج.م)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+      </section>
+
+      <!-- ===== شاشة تقارير المبيعات والمشتريات ===== -->
+      <section class="view view-reports" id="viewReports" data-id="reports" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnRefreshReports" class="btn gray" type="button">تحديث 🔄</button>
+            <button id="btnExportReports" class="btn green" type="button">📥 تصدير Excel (CSV)</button>
+          </div>
+          <h1 class="view-title">📈 تقارير المبيعات والمشتريات</h1>
+        </div>
+
+        <div class="search-bar">
+          <label class="filter-label" for="dtpRepFrom">من:</label>
+          <input type="date" id="dtpRepFrom" class="filter-select" />
+          <label class="filter-label" for="dtpRepTo">إلى:</label>
+          <input type="date" id="dtpRepTo" class="filter-select" />
+          <span id="repSummary" class="stk-summary"></span>
+        </div>
+
+        <div class="rpt-row">
+          <div class="data-panel">
+            <div class="panel-title">🛍️ تقرير المبيعات حسب الأصناف</div>
+            <div class="table-wrap">
+              <table id="dgvRepSales" class="dgv">
+                <thead><tr><th>الصنف</th><th>الكمية</th><th>القيمة (ج.م)</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="data-panel">
+            <div class="panel-title">📦 تقرير المشتريات حسب الأصناف</div>
+            <div class="table-wrap">
+              <table id="dgvRepPurch" class="dgv">
+                <thead><tr><th>الصنف</th><th>الكمية</th><th>القيمة (ج.م)</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="rpt-row">
+          <div class="data-panel">
+            <div class="panel-title">👨‍💼 المبيعات حسب العميل</div>
+            <div class="table-wrap">
+              <table id="dgvRepCust" class="dgv">
+                <thead><tr><th>العميل</th><th>عدد الفواتير</th><th>القيمة (ج.م)</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="data-panel">
+            <div class="panel-title">👨‍💼 المشتريات حسب المورد</div>
+            <div class="table-wrap">
+              <table id="dgvRepSupp" class="dgv">
+                <thead><tr><th>المورد</th><th>عدد الفواتير</th><th>القيمة (ج.م)</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ===== شاشة المستخدمون والصلاحيات ===== -->
+      <section class="view view-users" id="viewUsers" data-id="users" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnAddUser" class="btn blue" type="button">➕ إضافة مستخدم</button>
+          </div>
+          <h1 class="view-title">👤 المستخدمون والصلاحيات (إعداد المدير فقط)</h1>
+        </div>
+
+        <div class="search-bar">
+          <label class="filter-label" for="txtUserSearch">🔍 بحث في المستخدمين:</label>
+          <input type="text" id="txtUserSearch" class="search-input" autocomplete="new-search" />
+        </div>
+
+        <div class="table-wrap">
+          <table id="dgvUsers" class="dgv">
+            <thead>
+              <tr>
+                <th hidden>المعرف</th>
+                <th style="width:14%">اسم المستخدم</th>
+                <th style="width:22%">الاسم الكامل</th>
+                <th style="width:16%">الصلاحية (الدور)</th>
+                <th style="width:12%">الفرع</th>
+                <th style="width:12%">الحالة</th>
+                <th style="width:14%">آخر ظهور</th>
+                <th style="width:10%">تعديل</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+      </section>
+
+      <!-- ===== شاشة سجل العمليات ===== -->
+      <section class="view view-audit" id="viewAudit" data-id="audit" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnExportAudit" class="btn green" type="button">📥 تصدير Excel (CSV)</button>
+          </div>
+          <h1 class="view-title">📋 سجل العمليات (تدقيق النظام)</h1>
+        </div>
+
+        <div class="search-bar">
+          <label class="filter-label" for="txtAuditSearch">🔍 بحث في العمليات:</label>
+          <input type="text" id="txtAuditSearch" class="search-input" autocomplete="new-search" />
+        </div>
+
+        <div class="table-wrap">
+          <table id="dgvAudit" class="dgv">
+            <thead>
+              <tr>
+                <th style="width:12%">الوقت</th><th style="width:12%">المستخدم</th><th style="width:18%">العملية</th><th>البيان والتفاصيل</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+      </section>
+
+      <!-- ===== شاشة الإعدادات والنسخ الاحتياطي ===== -->
+      <section class="view view-settings" id="viewSettings" data-id="settings" hidden>
+
+        <div class="view-header">
+          <div class="view-actions">
+            <button id="btnSaveSettings" class="btn blue" type="button">💾 حفظ الإعدادات</button>
+          </div>
+          <h1 class="view-title">⚙️ الإعدادات والنسخ الاحتياطي (نسخة الويب أونلاين)</h1>
+        </div>
+
+        <div class="sett-box">
+          <div class="panel-title">🏢 بيانات الشركة والمؤسسة</div>
+          <div class="form-grid">
+            <label for="setOrgName">اسم المؤسسة:</label>
+            <input type="text" id="setOrgName" autocomplete="off" />
+            <label for="setOrgPhone">رقم الهاتف:</label>
+            <input type="text" id="setOrgPhone" autocomplete="off" />
+            <label for="setOrgAddress">العنوان:</label>
+            <input type="text" id="setOrgAddress" autocomplete="off" />
+            <label for="setOrgVat">الرقم الضريبي (VAT):</label>
+            <input type="text" id="setOrgVat" autocomplete="off" />
+            <label for="setOrgNote">سطر مطبوع أسفل الفواتير:</label>
+            <input type="text" id="setOrgNote" autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="sett-box">
+          <div class="panel-title">🧾 الضريبة</div>
+          <div class="form-grid">
+            <label for="setTaxEnabled">تطبيق ضريبة المبيعات:</label>
+            <select id="setTaxEnabled"><option value="1">نشطة 🟢</option><option value="0">معطلة 🔴</option></select>
+            <label for="setTaxRate">نسبة الضريبة (%):</label>
+            <input type="text" id="setTaxRate" autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="sett-box">
+          <div class="panel-title">🌐 خصائص النسخة الأونلاين (الاشتراك)</div>
+          <div class="form-grid">
+            <label for="setPlan">باقة الاشتراك:</label>
+            <select id="setPlan">
+              <option>فردي (مستخدم واحد)</option>
+              <option>فريق (حتى 5 مستخدمين)</option>
+              <option>شركة (غير محدود)</option>
+            </select>
+            <label for="setPlanEnd">نهاية الاشتراك:</label>
+            <input type="date" id="setPlanEnd" autocomplete="off" />
+            <label for="setPlanStatus">حالة الاشتراك:</label>
+            <select id="setPlanStatus"><option>نشط 🟢</option><option>منتهي 🔴</option><option>تجربة 🧪</option></select>
+            <label for="setPublishUrl">رابط النشر الحالي:</label>
+            <input type="text" id="setPublishUrl" class="ro" readonly />
+            <label for="setAdminOnly">🧑‍💼 (خاص بالمدير) إدارة المستخدمين والصلاحيات:</label>
+            <span class="stk-hint">تظهر هذه الشاشة كاملة للمدير فقط ولا تظهر لعملاء الاشتراك (كل مؤسسة ترى بياناتها وصلاحياتها فقط).</span>
+          </div>
+        </div>
+
+        <div class="sett-box">
+          <div class="panel-title">💾 النسخ الاحتياطي والاستعادة</div>
+          <div class="sett-btns">
+            <button id="btnBackup" class="btn green" type="button">📤 تصدير/نسخة احتياطية (JSON)</button>
+            <button id="btnRestore" class="btn orange" type="button">📥 استعادة/استيراد نسخة</button>
+            <button id="btnResetData" class="btn red" type="button">🗑️ مسح جميع البيانات التجريبية</button>
+          </div>
+          <input type="file" id="fileRestore" accept=".json,application/json" hidden />
+        </div>
+
+      </section>
+
       <!-- ====== صفحة كشف الحساب للطباعة ====== -->
       <section class="print-only statement-page" id="statementPage">
         <div class="statement-head">
@@ -325,6 +885,56 @@
           <tbody id="invBodyPrint"></tbody>
         </table>
         <div class="inv-foot-print" id="invFootPrint"></div>
+      </section>
+
+      <!-- ====== صفحة فاتورة المشتريات للطباعة ====== -->
+      <section class="print-only statement-page" id="purchasePage">
+        <div class="statement-head">
+          <h2>🧾 فاتورة مشتريات رقم: <span id="ppInvNo"></span></h2>
+          <p>التاريخ: <span id="ppDate"></span> | المورد: <span id="ppSuppPrint"></span> | المستودع: <span id="ppWhPrint"></span> | الدفع: <span id="ppPayPrint"></span></p>
+          <p class="stmt-brand">mizan web | برنامج «ميزان» للمحاسبة وإدارة الأعمال | By Adel Samir - واتس: 01002655282</p>
+        </div>
+        <table class="stmt-table">
+          <thead>
+            <tr>
+              <th>كود الصنف</th><th>اسم الصنف</th><th>الوحدة</th><th>الكمية</th><th>السعر</th><th>الخصم</th><th>الضريبة</th><th>الإجمالي</th>
+            </tr>
+          </thead>
+          <tbody id="ppBody"></tbody>
+        </table>
+        <div class="inv-foot-print" id="ppFoot"></div>
+      </section>
+
+      <!-- ====== صفحة قائمة المركز المالي للطباعة ====== -->
+      <section class="print-only statement-page" id="balancePage">
+        <div class="statement-head">
+          <h2>⚖️ قائمة المركز المالي: <span id="blpOrg"></span></h2>
+          <p>حتى تاريخ: <span id="blpDate"></span></p>
+          <p class="stmt-brand">mizan web | برنامج «ميزان» للمحاسبة وإدارة الأعمال | By Adel Samir - واتس: 01002655282</p>
+        </div>
+        <table class="stmt-table">
+          <thead><tr><th>البند</th><th>القيمة (ج.م)</th></tr></thead>
+          <tbody id="blpAssets"></tbody>
+        </table>
+        <table class="stmt-table" style="margin-top:18px">
+          <thead><tr><th>البند</th><th>القيمة (ج.م)</th></tr></thead>
+          <tbody id="blpLiab"></tbody>
+        </table>
+        <div class="inv-foot-print" id="blpFoot"></div>
+      </section>
+
+      <!-- ====== صفحة كشف حساب الخزينة للطباعة ====== -->
+      <section class="print-only statement-page" id="treStmtPage">
+        <div class="statement-head">
+          <h2>📑 كشف حساب الخزينة: <span id="trpName"></span></h2>
+          <p>أساس الحساب: <span id="trpBase"></span> | الرصيد الحالي: <span id="trpBal"></span> ج.م</p>
+          <p class="stmt-brand">mizan web | برنامج «ميزان» للمحاسبة وإدارة الأعمال | By Adel Samir - واتس: 01002655282</p>
+        </div>
+        <table class="stmt-table">
+          <thead><tr><th>التاريخ</th><th>البيان</th><th>وارد (ج.م)</th><th>منصرف (ج.م)</th><th>الرصيد (ج.م)</th></tr></thead>
+          <tbody id="trpBody"></tbody>
+        </table>
+        <div class="inv-foot-print" id="trpFoot"></div>
       </section>
 
     </main>
@@ -509,6 +1119,240 @@
       <div class="modal-actions">
         <button id="btnCancelQuickCustomer" class="btn gray" type="button">إلغاء</button>
         <button id="btnSaveQuickCustomer" class="btn green" type="button">💾 حفظ العميل</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة إضافة سريعة: مورد -->
+  <div class="modal-overlay" id="mQuickSupplier" hidden>
+    <div class="modal m500" id="mQuickSupplierBox">
+      <h3>➕ إضافة مورد جديد - By Adel Samir - واتس: 01002655282</h3>
+      <div class="form-grid">
+        <label for="qSCode">كود المورد: *</label>
+        <input type="text" id="qSCode" autocomplete="off" />
+        <label for="qSName">اسم المورد: *</label>
+        <input type="text" id="qSName" autocomplete="off" />
+        <label for="qSPhone">رقم الهاتف:</label>
+        <input type="text" id="qSPhone" autocomplete="off" />
+        <label for="qSWallet">رقم المحفظة الإلكترونية:</label>
+        <input type="text" id="qSWallet" autocomplete="off" />
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelQuickSupplier" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveQuickSupplier" class="btn green" type="button">💾 حفظ المورد</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة إضافة / تعديل مورد -->
+  <div class="modal-overlay" id="mSuppAddEdit" hidden>
+    <div class="modal m500" id="mSuppAddEditBox">
+      <h3 id="suppAddEditTitle">إضافة مورد جديد</h3>
+      <div class="form-grid">
+        <label for="fSCode">كود المورد: *</label>
+        <input type="text" id="fSCode" autocomplete="off" />
+        <label for="fSName">اسم المورد: *</label>
+        <input type="text" id="fSName" autocomplete="off" />
+        <label for="fSPhone">رقم الهاتف:</label>
+        <input type="text" id="fSPhone" autocomplete="off" />
+        <label for="fSWallet">رقم المحفظة الإلكترونية:</label>
+        <input type="text" id="fSWallet" autocomplete="off" />
+        <label for="fSAddress">العنوان:</label>
+        <input type="text" id="fSAddress" autocomplete="off" />
+        <label for="fSNotes">ملاحظات:</label>
+        <input type="text" id="fSNotes" autocomplete="off" />
+        <label for="fSOpening">الرصيد الافتتاحي (المستحق للمورد):</label>
+        <input type="text" id="fSOpening" value="0.00" autocomplete="off" />
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelSuppAdd" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveSupplier" class="btn orange" type="button">💾 حفظ المورد</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة خيارات المورد -->
+  <div class="modal-overlay" id="mSuppActions" hidden>
+    <div class="modal m560" id="mSuppActionsBox">
+      <h3 id="sactTitle">📦 إدارة المورد</h3>
+      <div class="act-info">
+        <div class="act-head" id="sactName">📦 المورد:</div>
+        <div class="act-line" id="sactDetails1">الكود: - | الهاتف: -</div>
+        <div class="act-line" id="sactDetails2">العنوان: - | ملاحظات: -</div>
+        <div class="act-bal" id="sactBalance">الرصيد الحالي (المستحق): 0.00 ج.م</div>
+      </div>
+      <div class="act-btns">
+        <button class="btn teal act-row1" id="sactStatement" type="button">📜 عرض وطباعة كشف الحساب</button>
+        <button class="btn blue act-row1" id="sactEdit" type="button">✏️ تعديل بيانات المورد</button>
+        <button class="btn green act-row2" id="sactPay" type="button">💵 سداد مستحقات المورد</button>
+        <button class="btn red act-row3" id="sactDelete" type="button">🗑️ حذف المورد</button>
+        <button class="btn light act-row4" id="sactClose" type="button">❌ إغلاق النافذة</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة سداد مستحقات مورد -->
+  <div class="modal-overlay" id="mPaySuppDebt" hidden>
+    <div class="modal m500" id="mPaySuppDebtBox">
+      <h3>💵 سداد مستحقات مورد - By Adel Samir - واتس: 01002655282</h3>
+      <div class="form-grid">
+        <label for="psSupplier">اختيار المورد: *</label>
+        <select id="psSupplier"></select>
+        <label for="psMethod">طريقة السداد:</label>
+        <select id="psMethod">
+          <option>نقداً 💵</option>
+          <option>تحويل بنكي 🏛️</option>
+          <option>محفظة إلكترونية 📱</option>
+        </select>
+        <label for="psTreasury">الخزينة / الحساب:</label>
+        <select id="psTreasury"></select>
+        <label for="psAmount">المبلغ المسدد (ج.م): *</label>
+        <input type="text" id="psAmount" autocomplete="off" />
+        <label for="psNotes">ملاحظات / بيان السداد:</label>
+        <input type="text" id="psNotes" value="سداد دفعة نقداً من حساب المورد" autocomplete="off" />
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelSupPay" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveSupPay" class="btn green" type="button">💾 حفظ وسداد المستحقات</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة إضافة / تعديل خزينة -->
+  <div class="modal-overlay" id="mTreasury" hidden>
+    <div class="modal m520" id="mTreasuryBox">
+      <h3 id="treasuryModalTitle">➕ إضافة خزينة / حساب</h3>
+      <div class="form-grid">
+        <label for="tName">اسم الخزينة / الحساب: *</label>
+        <input type="text" id="tName" autocomplete="off" />
+        <label for="tType">النوع:</label>
+        <select id="tType">
+          <option value="cash">صندوق نقدي 💵</option>
+          <option value="bank">حساب بنكي 🏛️</option>
+          <option value="wallet">محفظة إلكترونية 📱</option>
+        </select>
+        <label for="tAccountNo">رقم الحساب (للبنك) / رقم المحفظة:</label>
+        <input type="text" id="tAccountNo" autocomplete="off" />
+        <label for="tOpening">الرصيد الافتتاحي (ج.م):</label>
+        <input type="text" id="tOpening" value="0.00" autocomplete="off" />
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelTreasury" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveTreasury" class="btn blue" type="button">💾 حفظ الخزينة</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة سند قبض / صرف -->
+  <div class="modal-overlay" id="mVoucher" hidden>
+    <div class="modal m520" id="mVoucherBox">
+      <h3 id="voucherTitle">➕ سند قبض (إيراد)</h3>
+      <div class="form-grid">
+        <label for="vTreasury">الخزينة / الحساب: *</label>
+        <select id="vTreasury"></select>
+        <label for="vDate">التاريخ:</label>
+        <input type="date" id="vDate" autocomplete="off" />
+        <label for="vAmount">المبلغ (ج.م): *</label>
+        <input type="text" id="vAmount" autocomplete="off" />
+        <label for="vDesc">البيان:</label>
+        <input type="text" id="vDesc" autocomplete="off" />
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelVoucher" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveVoucher" class="btn green" type="button">💾 حفظ السند</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة إضافة / تعديل حساب -->
+  <div class="modal-overlay" id="mAccount" hidden>
+    <div class="modal m520" id="mAccountBox">
+      <h3 id="accountModalTitle">➕ إضافة حساب</h3>
+      <div class="form-grid">
+        <label for="aCode">كود الحساب: *</label>
+        <input type="text" id="aCode" autocomplete="off" />
+        <label for="aName">اسم الحساب: *</label>
+        <input type="text" id="aName" autocomplete="off" />
+        <label for="aType">النوع:</label>
+        <select id="aType">
+          <option value="asset">أصل (مدين)</option>
+          <option value="liability">التزام (دائن)</option>
+          <option value="equity">حقوق ملكية (دائن)</option>
+          <option value="revenue">إيراد (دائن)</option>
+          <option value="expense">مصروف (مدين)</option>
+        </select>
+        <label for="aParent">الحساب الأب:</label>
+        <select id="aParent"></select>
+        <label for="aOpening">الرصيد الافتتاحي (ج.م):</label>
+        <input type="text" id="aOpening" value="0.00" autocomplete="off" />
+        <label for="aActive">الحالة:</label>
+        <select id="aActive">
+          <option value="1">نشط 🟢</option>
+          <option value="0">غير نشط 🔴</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelAccount" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveAccount" class="btn blue" type="button">💾 حفظ الحساب</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة قيد يومية -->
+  <div class="modal-overlay" id="mJournal" hidden>
+    <div class="modal m520 modal-tall" id="mJournalBox">
+      <h3 id="journalModalTitle">➕ قيد يومية جديد</h3>
+      <div class="form-grid">
+        <label for="jDate">التاريخ: *</label>
+        <input type="date" id="jDate" autocomplete="off" />
+        <label for="jDesc">البيان: *</label>
+        <input type="text" id="jDesc" autocomplete="off" />
+        <label for="jRef">المرجع (مثال: يدوي / فاتورة):</label>
+        <input type="text" id="jRef" value="قيد يدوي" autocomplete="off" />
+      </div>
+      <div class="jrn-lines">
+        <div class="jrn-head"><span>الحساب</span><span>مدين (ج.م)</span><span>دائن (ج.م)</span><span></span></div>
+        <div id="jrnLines"></div>
+      </div>
+      <div class="jrn-total"><span id="jrnSum">المديون: 0.00 | الدائن: 0.00 | ✓ متوازن</span>
+        <button id="btnAddJLine" class="btn gray" type="button">➕ سطر جديد</button></div>
+      <div class="modal-actions">
+        <button id="btnCancelJournal" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveJournal" class="btn blue" type="button">💾 حفظ القيد</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نافذة إضافة / تعديل مستخدم -->
+  <div class="modal-overlay" id="mUser" hidden>
+    <div class="modal m520" id="mUserBox">
+      <h3 id="userModalTitle">➕ إضافة مستخدم</h3>
+      <div class="form-grid">
+        <label for="uUsername">اسم المستخدم (للدخول): *</label>
+        <input type="text" id="uUsername" autocomplete="off" />
+        <label for="uFullName">الاسم الكامل: *</label>
+        <input type="text" id="uFullName" autocomplete="off" />
+        <label for="uPassword">كلمة المرور: *</label>
+        <input type="password" id="uPassword" autocomplete="new-password" />
+        <label for="uRole">الصلاحية (الدور):</label>
+        <select id="uRole">
+          <option>مدير النظام</option>
+          <option>مشرف</option>
+          <option>محاسب</option>
+          <option>أمين خزينة</option>
+          <option>موظف مبيعات</option>
+        </select>
+        <label for="uBranch">الفرع:</label>
+        <select id="uBranch"></select>
+        <label for="uActive">الحالة:</label>
+        <select id="uActive">
+          <option value="1">نشط 🟢</option>
+          <option value="0">موقوف 🔴</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelUser" class="btn gray" type="button">إلغاء</button>
+        <button id="btnSaveUser" class="btn blue" type="button">💾 حفظ المستخدم</button>
       </div>
     </div>
   </div>

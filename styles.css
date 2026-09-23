@@ -666,3 +666,127 @@ body {
   line-height: 1.8;
   font-weight: bold;
 }
+
+/* ===== تبويبات ===== */
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.tab-btn {
+  padding: 9px 22px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  background: var(--primary-dark);
+  color: #fff;
+  border-color: var(--primary-dark);
+}
+
+/* ===== صفوف التقارير ===== */
+.rpt-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+@media (max-width: 900px) {
+  .rpt-row { grid-template-columns: 1fr; }
+}
+
+/* ===== شبكة المركز المالي ===== */
+.bal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+@media (max-width: 900px) {
+  .bal-grid { grid-template-columns: 1fr; }
+}
+
+/* ===== الإعدادات ===== */
+.sett-box {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-top: 14px;
+}
+
+.sett-box .form-grid { grid-template-columns: 220px 1fr; }
+
+.sett-btns {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+/* ===== أسطر القيد اليومي ===== */
+.jrn-lines {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.jrn-head, .jrn-line {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 44px;
+  gap: 8px;
+  padding: 6px 10px;
+  align-items: center;
+}
+
+.jrn-head {
+  background: var(--primary-soft);
+  font-weight: bold;
+  font-size: 12px;
+  color: var(--primary-dark);
+}
+
+.jrn-line select, .jrn-line input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.jrn-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+#jrnSum {
+  font-weight: bold;
+  color: var(--info);
+}
+
+/* ===== شريط مخصص للنافذة الافتراضي ===== */
+.filter-label {
+  color: var(--text-secondary);
+  font-weight: bold;
+  font-size: 12px;
+}
+
+.stk-summary {
+  font-weight: bold;
+  color: var(--primary-dark);
+}
