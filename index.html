@@ -309,6 +309,24 @@
         </table>
       </section>
 
+      <!-- ====== صفحة فاتورة المبيعات للطباعة ====== -->
+      <section class="print-only statement-page" id="invoicePage">
+        <div class="statement-head">
+          <h2>🧾 فاتورة مبيعات رقم: <span id="invNoPrint"></span></h2>
+          <p>التاريخ: <span id="invDatePrint"></span> | العميل: <span id="invCustPrint"></span> | المستودع: <span id="invWhPrint"></span> | الدفع: <span id="invPayPrint"></span></p>
+          <p class="stmt-brand">mizan web | برنامج «ميزان» للمحاسبة وإدارة الأعمال | By Adel Samir - واتس: 01002655282</p>
+        </div>
+        <table class="stmt-table">
+          <thead>
+            <tr>
+              <th>كود الصنف</th><th>اسم الصنف</th><th>الوحدة</th><th>الكمية</th><th>السعر</th><th>الخصم</th><th>الضريبة</th><th>الإجمالي</th>
+            </tr>
+          </thead>
+          <tbody id="invBodyPrint"></tbody>
+        </table>
+        <div class="inv-foot-print" id="invFootPrint"></div>
+      </section>
+
     </main>
   </div>
 

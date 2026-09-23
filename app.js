@@ -220,8 +220,22 @@
     $("#" + id).hidden = true;
   }
 
+  function printSection(el) {
+    document.querySelectorAll(".print-only").forEach((s) => s.classList.remove("print-target"));
+    el.classList.add("print-target");
+    document.body.classList.add("printing");
+    const cleanup = () => {
+      el.classList.remove("print-target");
+      document.body.classList.remove("printing");
+      window.removeEventListener("afterprint", cleanup);
+    };
+    window.addEventListener("afterprint", cleanup);
+    window.print();
+    setTimeout(cleanup, 1200);
+  }
+
   /* ================== الروترة بين الشاشات ================== */
-  const BUILT_VIEWS = ["dashboard", "customers", "products"];
+  const BUILT_VIEWS = ["dashboard", "customers", "products", "sales"];
 
   function showView(name) {
     document.querySelectorAll(".view[data-id]").forEach((v) => {
@@ -233,6 +247,13 @@
     if (name === "dashboard") renderDashboard();
     if (name === "customers") renderTable();
     if (name === "products") renderProducts();
+    if (name === "sales") {
+      if (!posInitialized) {
+        posInitialized = true;
+        posNewInvoice();
+      }
+      renderSalesLookups();
+    }
   }
 
   /* ================== لوحة التحكم ================== */
@@ -582,7 +603,7 @@
     bal.textContent = fmt(cust.currentBalance);
     bal.className = cust.currentBalance > 0 ? "balance-debit" : "balance-credit";
     fillStatementTable($("#stmBody"), cust);
-    window.print();
+    printSection($("#statementPage"));
   }
 
   /* ================== شاشة الأصناف والمخزون ================== */
@@ -924,7 +945,480 @@
         '<td>' + esc(tr.cells[4].textContent) + '</td>';
       tb.appendChild(tr2);
     });
-    window.print();
+    printSection($("#stockPage"));
+  }
+
+  /* ================== شاشة فواتير المبيعات (POS) ================== */
+  let posItems = [];
+  let posInitialized = false;
+
+  function nextInvoiceNumber() {
+    const d = new Date();
+    const p = (x) => String(x).padStart(2, "0");
+    return "INV-" + String(d.getFullYear()).slice(2) + p(d.getMonth() + 1) + p(d.getDate()) + "-" + String(sales.length + 1).padStart(4, "0");
+  }
+
+  function activeDiscountPct(p) {
+    const pct = Number(p.discountPercent) || 0;
+    if (pct <= 0) return 0;
+    if (p.discountStart && p.discountEnd) {
+      const now = new Date();
+      const s = new Date(p.discountStart + "T00:00:00");
+      const e = new Date(p.discountEnd + "T23:59:59");
+      return now >= s && now <= e ? pct : 0;
+    }
+    return pct;
+  }
+
+  function findProductFlexible(q) {
+    const n = normalizeAr(q);
+    if (!n) return null;
+    return products.find((p) => normalizeAr(p.code) === n || (p.barcode && normalizeAr(p.barcode) === n))
+      || products.find((p) => normalizeAr(p.code).includes(n) || normalizeAr(p.nameAr).includes(n) || (p.barcode && normalizeAr(p.barcode).includes(n)))
+      || null;
+  }
+
+  function renderSalesLookups() {
+    const custSel = $("#cmbPosCustomer");
+    const prevCust = custSel.value;
+    custSel.innerHTML = "";
+    customers.forEach((c) => {
+      const opt = document.createElement("option");
+      opt.value = c.id;
+      opt.textContent = c.nameAr;
+      custSel.appendChild(opt);
+    });
+    if (prevCust) custSel.value = prevCust;
+
+    const whSel = $("#cmbPosWarehouse");
+    const prevWh = whSel.value;
+    whSel.innerHTML = "";
+    WAREHOUSES.forEach((w) => {
+      const opt = document.createElement("option");
+      opt.value = w;
+      opt.textContent = w;
+      whSel.appendChild(opt);
+    });
+    if (prevWh) whSel.value = prevWh;
+
+    fillPosPicker();
+    fillPosDatalist();
+  }
+
+  function fillPosPicker() {
+    const sel = $("#cmbPosPicker");
+    const prev = sel.value;
+    sel.innerHTML = "";
+    const opt0 = document.createElement("option");
+    opt0.value = "0";
+    opt0.textContent = "-- اختر صنفاً من المخزن للإضافة --";
+    sel.appendChild(opt0);
+    products.filter((p) => p.isActive).forEach((p) => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = "[" + p.code + "] " + p.nameAr + " (المخزن: " + Number(p.qty).toLocaleString("en-US") + " " + p.unit + " | " + fmt(p.salePrice) + " ج.م)";
+      sel.appendChild(opt);
+    });
+    sel.value = prev && sel.querySelector('option[value="' + prev + '"]') ? prev : "0";
+  }
+
+  function fillPosDatalist() {
+    const dl = $("#posProductsList");
+    dl.innerHTML = "";
+    products.filter((p) => p.isActive).forEach((p) => {
+      [p.nameAr, p.code, p.barcode].forEach((v) => {
+        if (!v) return;
+        const o = document.createElement("option");
+        o.value = v;
+        dl.appendChild(o);
+      });
+    });
+  }
+
+  function posSelectDefaultCustomer() {
+    const sel = $("#cmbPosCustomer");
+    const def = customers.find((c) => c.code === "CASH") || customers.find((c) => (c.nameAr || "").includes("نقدي")) || customers[0];
+    if (def) sel.value = String(def.id);
+  }
+
+  function posUpdateBadge(p) {
+    if (!p) {
+      $("#sbName").textContent = "—";
+      $("#sbQty").textContent = "الرصيد: -";
+      $("#sbPrice").textContent = "سعر البيع: -";
+      return;
+    }
+    $("#sbName").textContent = p.nameAr;
+    $("#sbQty").textContent = "الرصيد: " + Number(p.qty).toLocaleString("en-US") + " " + p.unit;
+    $("#sbPrice").textContent = "سعر البيع: " + fmt(p.salePrice) + " ج.م";
+  }
+
+  function posNewInvoice() {
+    posItems = [];
+    $("#txtInvoiceNo").value = nextInvoiceNumber();
+    $("#dtpDate").value = todayISO();
+    $("#cmbPaymentMethod").value = "نقداً";
+    $("#txtPosDiscount").value = "0";
+    $("#txtPosSearch").value = "";
+    $("#numPosQty").value = "1";
+    $("#txtPosPrice").value = "";
+    $("#cmbPosPicker").value = "0";
+    posSelectDefaultCustomer();
+    posPaymentVisibility();
+    posUpdateBadge(null);
+    renderPosItems();
+    posRecalc();
+  }
+
+  function posPaymentVisibility() {
+    const m = $("#cmbPaymentMethod").value;
+    const isBank = m.includes("بنكي");
+    const isWallet = m.includes("محفظة");
+    $("#fldPosBank").hidden = !isBank;
+    $("#fldPosWallet").hidden = !isWallet;
+    const fill = (sel, type) => {
+      const s = $(sel);
+      s.innerHTML = "";
+      treasury.filter((t) => t.type === type).forEach((t) => {
+        const o = document.createElement("option");
+        o.value = t.id;
+        o.textContent = t.name;
+        s.appendChild(o);
+      });
+    };
+    if (isBank) fill("#cmbPosBank", "bank");
+    if (isWallet) fill("#cmbPosWallet", "wallet");
+  }
+
+  function posOnSearch() {
+    const q = $("#txtPosSearch").value.trim();
+    if (!q) return;
+    const p = findProductFlexible(q);
+    if (p) {
+      $("#txtPosPrice").value = fmt(p.salePrice);
+      posUpdateBadge(p);
+    }
+  }
+
+  function posPickFromList() {
+    const id = parseInt($("#cmbPosPicker").value, 10);
+    if (!id) return;
+    const p = products.find((x) => x.id === id);
+    if (!p) return;
+    $("#txtPosSearch").value = p.nameAr;
+    $("#txtPosPrice").value = fmt(p.salePrice);
+    posUpdateBadge(p);
+    $("#numPosQty").focus();
+  }
+
+  function posAddItem() {
+    let q = $("#txtPosSearch").value.trim();
+    let prod = q ? findProductFlexible(q) : null;
+    if (!prod) {
+      const pid = parseInt($("#cmbPosPicker").value, 10);
+      if (pid) prod = products.find((p) => p.id === pid);
+    }
+    if (!prod) {
+      toast("لم يتم العثور على صنف يطابق الاسم أو الكود المكتوب.\nيمكنك استخدام زر (➕ إضافة صنف جديد للمخزن).", "warning");
+      return;
+    }
+    if (!prod.isActive) {
+      toast("الصنف (" + prod.nameAr + ") معطل وغير متاح للبيع.", "warning");
+      return;
+    }
+    let qty = parseFloat(String($("#numPosQty").value).replace(/,/g, ""));
+    if (!(qty > 0)) qty = 1;
+    let price = parseFloat(String($("#txtPosPrice").value).replace(/,/g, ""));
+    if (isNaN(price)) price = prod.salePrice;
+
+    const pct = activeDiscountPct(prod);
+    const existing = posItems.find((it) => it.productId === prod.id);
+    if (existing) {
+      existing.qty = Math.round((existing.qty + qty) * 100) / 100;
+      if (pct > 0) existing.discount = Math.round(existing.qty * existing.price * pct / 100 * 100) / 100;
+    } else {
+      posItems.push({
+        productId: prod.id,
+        code: prod.code,
+        nameAr: prod.nameAr,
+        unit: prod.unit,
+        qty: qty,
+        price: price,
+        discount: pct > 0 ? Math.round(qty * price * pct / 100 * 100) / 100 : 0,
+        tax: 0,
+        total: 0
+      });
+    }
+    $("#txtPosSearch").value = "";
+    $("#numPosQty").value = "1";
+    $("#txtPosPrice").value = "";
+    $("#cmbPosPicker").value = "0";
+    posUpdateBadge(prod);
+    renderPosItems();
+    posRecalc();
+    $("#txtPosSearch").focus();
+  }
+
+  function posCalcRow(idx) {
+    const it = posItems[idx];
+    const sub = Math.max(it.qty * it.price - it.discount, 0);
+    it.tax = TAX.enabled ? Math.round(sub * TAX.rate * 100) / 100 : 0;
+    it.total = Math.round((sub + it.tax) * 100) / 100;
+  }
+
+  function posRecalc() {
+    let sub = 0, tax = 0;
+    posItems.forEach((it, i) => {
+      posCalcRow(i);
+      sub += it.qty * it.price - it.discount;
+      tax += it.tax;
+    });
+    sub = Math.round(sub * 100) / 100;
+    tax = Math.round(tax * 100) / 100;
+    const extra = parseFloat(String($("#txtPosDiscount").value).replace(/,/g, "")) || 0;
+    let grand = Math.round((sub + tax - extra) * 100) / 100;
+    if (grand < 0) grand = 0;
+    $("#lblPosSubTotal").textContent = (TAX.enabled ? "المجموع: " : "الإجمالي: ") + fmt(sub) + " ج.م";
+    $("#lblPosTax").textContent = TAX.enabled ? "ضريبة المبيعات (" + Math.round(TAX.rate * 100) + "%): " + fmt(tax) + " ج.م" : "";
+    $("#lblPosTax").hidden = !TAX.enabled;
+    $("#lblPosTotal").textContent = (TAX.enabled ? "الصافي النهائي: " : "الإجمالي: ") + fmt(grand) + " ج.م";
+    return { sub: sub, tax: tax, extra: extra, grand: grand };
+  }
+
+  function renderPosItems() {
+    const tbody = $("#dgvItems tbody");
+    tbody.innerHTML = "";
+    posItems.forEach((it, i) => {
+      posCalcRow(i);
+      const tr = document.createElement("tr");
+      tr.dataset.idx = i;
+      tr.innerHTML =
+        '<td>' + esc(it.code) + '</td>' +
+        '<td style="text-align:right">' + esc(it.nameAr) + '</td>' +
+        '<td>' + esc(it.unit) + '</td>' +
+        '<td><input class="cell-input" data-f="qty" type="text" value="' + esc(it.qty) + '" /></td>' +
+        '<td><input class="cell-input" data-f="price" type="text" value="' + fmt(it.price) + '" /></td>' +
+        '<td><input class="cell-input" data-f="discount" type="text" value="' + fmt(it.discount) + '" /></td>' +
+        '<td class="c-tax">' + fmt(it.tax) + '</td>' +
+        '<td class="c-total">' + fmt(it.total) + '</td>' +
+        '<td class="cell-actions"><button class="btn small red" type="button" data-f="del">❌</button></td>';
+      tr.addEventListener("mouseenter", () => posUpdateBadge(products.find((p) => p.id === it.productId) || null));
+      tbody.appendChild(tr);
+    });
+  }
+
+  function savePosInvoice() {
+    if (posItems.length === 0) {
+      toast("يرجى إضافة أصناف إلى الفاتورة أولاً.", "warning");
+      return;
+    }
+    const methods = ["نقداً", "آجل", "تحويل بنكي", "محافظ إلكترونية"];
+    const payment = methods[$("#cmbPaymentMethod").selectedIndex] || "نقداً";
+    const custId = parseInt($("#cmbPosCustomer").value, 10);
+    const cust = customers.find((c) => c.id === custId);
+    if (!cust) {
+      toast("يرجى اختيار العميل.", "warning");
+      return;
+    }
+    if (payment === "آجل" && cust.protected) {
+      toast("الرجاء اختيار عميل حقيقي للبيع الآجل (لا يمكن ترحيلها للعميل النقدي).", "warning");
+      return;
+    }
+    const warehouse = $("#cmbPosWarehouse").value;
+    if (!warehouse) {
+      toast("يرجى اختيار المستودع.", "warning");
+      return;
+    }
+
+    const shortages = posItems
+      .map((it) => {
+        const p = products.find((x) => x.id === it.productId);
+        return p && p.qty >= it.qty ? null : it.nameAr + " (المتاح: " + (p ? Number(p.qty).toLocaleString("en-US") : 0) + ")";
+      })
+      .filter(Boolean);
+    if (shortages.length > 0) {
+      toast("لا يوجد رصيد كافٍ للأصناف التالية:\n" + shortages.join("\n"), "warning");
+      return;
+    }
+
+    const t = posRecalc();
+    const invoice = {
+      id: sales.reduce((m, x) => Math.max(m, x.id), 0) + 1,
+      invoiceNumber: $("#txtInvoiceNo").value,
+      invoiceDate: $("#dtpDate").value || todayISO(),
+      customerId: cust.id,
+      customerName: cust.nameAr,
+      warehouse: warehouse,
+      paymentMethod: payment,
+      treasuryId: null,
+      discountAmount: t.extra,
+      taxAmount: t.tax,
+      subTotal: t.sub,
+      grandTotal: t.grand,
+      items: posItems.map((it) => ({ productId: it.productId, code: it.code, nameAr: it.nameAr, unit: it.unit, qty: it.qty, price: it.price, discount: it.discount, tax: it.tax, total: it.total })),
+      status: "posted"
+    };
+
+    if (payment === "آجل") {
+      cust.currentBalance = Math.round((cust.currentBalance + t.grand) * 100) / 100;
+      txs.push({ id: nextTxId(), customerId: cust.id, date: invoice.invoiceDate, desc: "فاتورة مبيعات آجلة رقم " + invoice.invoiceNumber, debit: t.grand, credit: 0 });
+      saveCustomers();
+      saveTxs();
+    } else {
+      const type = payment === "تحويل بنكي" ? "bank" : payment === "محافظ إلكترونية" ? "wallet" : "cash";
+      const selId = payment === "تحويل بنكي" ? parseInt($("#cmbPosBank").value, 10)
+        : payment === "محافظ إلكترونية" ? parseInt($("#cmbPosWallet").value, 10)
+        : treasury.find((x) => x.type === "cash") ? treasury.find((x) => x.type === "cash").id : null;
+      const tr = treasury.find((x) => x.id === selId && x.type === type) || treasury.find((x) => x.type === type);
+      if (tr) {
+        tr.balance = Math.round((tr.balance + t.grand) * 100) / 100;
+        invoice.treasuryId = tr.id;
+        saveTreasury();
+      }
+    }
+
+    posItems.forEach((it) => {
+      const p = products.find((x) => x.id === it.productId);
+      if (p) p.qty = Math.round((p.qty - it.qty) * 100) / 100;
+    });
+    saveProducts();
+
+    sales.push(invoice);
+    saveSales();
+    addActivity("فاتورة مبيعات", "فاتورة " + invoice.invoiceNumber + " - " + cust.nameAr + " - " + fmt(t.grand) + " ج.م (" + payment + ")");
+
+    toast("تم حفظ وتأكيد فاتورة المبيعات بنجاح برقم (" + invoice.invoiceNumber + ").", "success");
+    printInvoice(invoice);
+    fillPosPicker();
+    fillPosDatalist();
+    posNewInvoice();
+  }
+
+  function printInvoice(inv) {
+    $("#invNoPrint").textContent = inv.invoiceNumber;
+    $("#invDatePrint").textContent = inv.invoiceDate;
+    $("#invCustPrint").textContent = inv.customerName;
+    $("#invWhPrint").textContent = inv.warehouse;
+    $("#invPayPrint").textContent = inv.paymentMethod;
+    const tb = $("#invBodyPrint");
+    tb.innerHTML = "";
+    inv.items.forEach((it) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td>' + esc(it.code) + '</td>' +
+        '<td style="text-align:right">' + esc(it.nameAr) + '</td>' +
+        '<td>' + esc(it.unit) + '</td>' +
+        '<td>' + esc(Number(it.qty).toLocaleString("en-US")) + '</td>' +
+        '<td>' + fmt(it.price) + '</td>' +
+        '<td>' + fmt(it.discount) + '</td>' +
+        '<td>' + fmt(it.tax) + '</td>' +
+        '<td>' + fmt(it.total) + '</td>';
+      tb.appendChild(tr);
+    });
+    $("#invFootPrint").innerHTML =
+      "المجموع: <b>" + fmt(inv.subTotal) + " ج.م</b> | الخصم الإضافي: <b>" + fmt(inv.discountAmount) + " ج.م</b> | " +
+      "الضريبة: <b>" + fmt(inv.taxAmount) + " ج.م</b> | الصافي النهائي: <b>" + fmt(inv.grandTotal) + " ج.م</b>";
+    printSection($("#invoicePage"));
+  }
+
+  function openSalesForCustomer(cust) {
+    showView("sales");
+    posNewInvoice();
+    $("#cmbPosCustomer").value = String(cust.id);
+    toast("تم فتح فاتورة مبيعات جديدة باسم العميل (" + cust.nameAr + ").", "info");
+  }
+
+  /* ---- إضافة سريعة: صنف ---- */
+  function openQuickProduct() {
+    fillSelect("#qCat", productCategories(), CATEGORIES[0]);
+    fillSelect("#qUnit", UNITS, UNITS[0]);
+    $("#qCode").value = nextProductCode();
+    $("#qName").value = "";
+    $("#qQty").value = "10";
+    $("#qCost").value = "100";
+    $("#qSale").value = "150";
+    $("#qDisc").value = "0";
+    showModal("mQuickProduct");
+    $("#qName").focus();
+  }
+
+  function saveQuickProduct() {
+    const nameAr = $("#qName").value.trim();
+    if (!nameAr) {
+      toast("اسم الصنف مطلوب.", "warning");
+      return;
+    }
+    const purchase = parseFloat($("#qCost").value) || 0;
+    const sale = parseFloat($("#qSale").value) || 0;
+    const qty = parseFloat($("#qQty").value) || 0;
+    const disc = parseFloat($("#qDisc").value) || 0;
+    const p = {
+      id: nextProductId(),
+      code: $("#qCode").value.trim() || nextProductCode(),
+      barcode: "",
+      nameAr: nameAr,
+      nameEn: "",
+      category: $("#qCat").value,
+      unit: $("#qUnit").value,
+      defaultWarehouse: $("#cmbPosWarehouse").value || WAREHOUSES[0],
+      purchasePrice: purchase,
+      weightedAvgCost: purchase,
+      salePrice: sale,
+      discountPercent: disc,
+      discountStart: "",
+      discountEnd: "",
+      qty: qty,
+      reorder: 50,
+      isActive: true
+    };
+    products.push(p);
+    saveProducts();
+    addActivity("إضافة صنف", "إضافة صنف سريع من شاشة المبيعات: " + p.nameAr + " (" + p.code + ")");
+    hideModal("mQuickProduct");
+    fillPosPicker();
+    fillPosDatalist();
+    $("#txtPosSearch").value = p.nameAr;
+    $("#txtPosPrice").value = fmt(p.salePrice);
+    posUpdateBadge(p);
+    toast("تم حفظ الصنف (" + p.nameAr + ") برصيد " + qty + " في المخزن.", "success");
+  }
+
+  /* ---- إضافة سريعة: عميل ---- */
+  function openQuickCustomer() {
+    $("#qCCode").value = nextCustomerCode();
+    $("#qCName").value = "";
+    $("#qCPhone").value = "";
+    $("#qCWallet").value = "";
+    showModal("mQuickCustomer");
+    $("#qCName").focus();
+  }
+
+  function saveQuickCustomer() {
+    const nameAr = $("#qCName").value.trim();
+    if (!nameAr) {
+      toast("اسم العميل مطلوب.", "warning");
+      return;
+    }
+    const c = {
+      id: nextCustomerId(),
+      code: $("#qCCode").value.trim(),
+      nameAr: nameAr,
+      phone: $("#qCPhone").value.trim(),
+      secondaryPhone: "",
+      walletPhone: $("#qCWallet").value.trim(),
+      address: "",
+      notes: "",
+      openingBalance: 0,
+      currentBalance: 0,
+      protected: false
+    };
+    customers.push(c);
+    saveCustomers();
+    addActivity("إضافة عميل", "إضافة عميل سريع من شاشة المبيعات: " + c.nameAr + " (" + c.code + ")");
+    hideModal("mQuickCustomer");
+    renderSalesLookups();
+    $("#cmbPosCustomer").value = String(c.id);
+    toast("تمت إضافة العميل (" + c.nameAr + ") وتحديده في الفاتورة.", "success");
   }
 
   /* ================== الساعة ================== */
@@ -976,7 +1470,7 @@
     });
     $("#actInvoice").addEventListener("click", () => {
       hideModal("mActions");
-      toast("🧾 شاشة فواتير المبيعات قادمة قريبًا في نسخة الويب.", "info");
+      openSalesForCustomer(actionsCust);
     });
     $("#actDelete").addEventListener("click", () => {
       const cust = actionsCust;
@@ -1020,6 +1514,53 @@
     $("#btnPrintStockTake").addEventListener("click", printStockTake);
     $("#dgvStockTake tbody").addEventListener("input", (e) => {
       if (e.target.classList.contains("stk-qty-input")) computeStockDiff(e.target);
+    });
+
+    $("#btnQuickAddProduct").addEventListener("click", openQuickProduct);
+    $("#btnQuickAddCust").addEventListener("click", openQuickCustomer);
+    $("#btnSaveQuickProduct").addEventListener("click", saveQuickProduct);
+    $("#btnCancelQuickProduct").addEventListener("click", () => hideModal("mQuickProduct"));
+    $("#btnSaveQuickCustomer").addEventListener("click", saveQuickCustomer);
+    $("#btnCancelQuickCustomer").addEventListener("click", () => hideModal("mQuickCustomer"));
+
+    $("#cmbPaymentMethod").addEventListener("change", posPaymentVisibility);
+    $("#cmbPosPicker").addEventListener("change", posPickFromList);
+    $("#txtPosSearch").addEventListener("input", posOnSearch);
+    $("#txtPosSearch").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); posAddItem(); }
+    });
+    $("#numPosQty").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); posAddItem(); }
+    });
+    $("#txtPosPrice").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); posAddItem(); }
+    });
+    $("#btnPosAdd").addEventListener("click", posAddItem);
+    $("#btnPosNew").addEventListener("click", posNewInvoice);
+    $("#btnPosSave").addEventListener("click", savePosInvoice);
+    $("#txtPosDiscount").addEventListener("input", posRecalc);
+
+    $("#dgvItems tbody").addEventListener("input", (e) => {
+      const inp = e.target.closest(".cell-input");
+      if (!inp) return;
+      const tr = inp.closest("tr");
+      const idx = parseInt(tr.dataset.idx, 10);
+      const f = inp.dataset.f;
+      const v = parseFloat(String(inp.value).replace(/,/g, ""));
+      posItems[idx][f] = isNaN(v) ? 0 : v;
+      posCalcRow(idx);
+      tr.querySelector(".c-tax").textContent = fmt(posItems[idx].tax);
+      tr.querySelector(".c-total").textContent = fmt(posItems[idx].total);
+      posRecalc();
+    });
+
+    $("#dgvItems tbody").addEventListener("click", (e) => {
+      const btn = e.target.closest('[data-f="del"]');
+      if (!btn) return;
+      const idx = parseInt(btn.closest("tr").dataset.idx, 10);
+      posItems.splice(idx, 1);
+      renderPosItems();
+      posRecalc();
     });
 
     document.querySelectorAll(".modal-overlay").forEach((ov) => {

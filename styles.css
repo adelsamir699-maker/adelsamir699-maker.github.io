@@ -420,8 +420,10 @@ body {
 @media print {
   body { background: #fff; }
   .app-header, .sidebar, .app-footer, .modal-overlay, .toast { display: none !important; }
-  .print-only { display: block !important; }
   .content { padding: 0; overflow: visible; }
+  .print-only { display: none !important; }
+  .print-only.print-target { display: block !important; }
+  body.printing .view:not(.print-target) { display: none !important; }
   .statement-page {
     direction: rtl;
     padding: 10px;
@@ -534,3 +536,133 @@ body {
 .diff-pos { color: var(--success); font-weight: bold; }
 .diff-neg { color: var(--danger); font-weight: bold; }
 .diff-zero { color: var(--text-muted); }
+
+/* ===== شاشة فواتير المبيعات (POS) ===== */
+.btn.dark { background: var(--primary-dark); }
+.btn.dark:hover { background: #020617; }
+
+.pos-fields {
+  background: #fff;
+  border: 1px solid var(--border);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pos-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.fld {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fld.grow { flex: 1 1 200px; }
+.fld.grow2 { flex: 1 1 240px; }
+.fld-btn { justify-content: flex-end; }
+
+.fld label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.fld .lbl-accent { color: var(--accent); font-weight: bold; }
+
+.fld input, .fld select {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  background: #fff;
+}
+
+.fld input:focus, .fld select:focus { outline: 2px solid var(--sidebar-active); }
+.fld input.ro { background: var(--bg); color: var(--text-secondary); }
+.fld button { height: 34px; }
+
+.stock-badge {
+  width: 132px;
+  border: 2px solid var(--accent);
+  background: #EFF6FF;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  align-self: stretch;
+  justify-content: center;
+}
+
+.sb-title { font-weight: bold; color: var(--accent); font-size: 11px; }
+.sb-line { color: var(--text-primary); }
+
+.cell-input {
+  width: 100%;
+  min-width: 56px;
+  padding: 4px 6px;
+  text-align: center;
+  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  background: #fff;
+}
+
+.cell-input:focus { outline: 2px solid var(--sidebar-active); }
+.c-tax, .c-total { font-weight: bold; color: var(--primary-dark); }
+
+.pos-footer {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--primary-dark);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pos-foot-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ft-sub, .ft-tax { color: var(--text-secondary); }
+.ft-total {
+  font-size: 17px;
+  font-weight: bold;
+  color: var(--info);
+  margin-inline-start: auto;
+}
+
+.fld-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fld-inline input {
+  width: 110px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.inv-foot-print {
+  margin-top: 14px;
+  text-align: left;
+  font-size: 13px;
+  line-height: 1.8;
+  font-weight: bold;
+}
