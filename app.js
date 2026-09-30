@@ -1,6 +1,6 @@
 /* ================================================================
    برنامج ميزان - نسخة الويب | صفحة دليل العملاء
-   By Adel Samir - واتس: 01555304378
+   By Adel Samir - واتس: 01002655282
    نسخة تجريبية: البيانات محفوظة في متصفحك (localStorage)
    ================================================================ */
 
@@ -968,20 +968,125 @@
     $("#" + id).hidden = true;
   }
 
+  /* ========== «انشر على الفاتورة» — اختيار صاحب الشركة (ترحيل ٣٣) ========== */
+  const INV_FIELD_KEYS = ["name", "address", "phone", "tax_number"];
+  const INV_FIELD_DEFAULT = { name: true, address: true, phone: true, tax_number: true };
+
+  function normalizeInvFields(raw) {
+    const src = raw || {};
+    const out = {};
+    INV_FIELD_KEYS.forEach((k) => {
+      const v = src[k];
+      out[k] = (v === undefined || v === null)
+        ? INV_FIELD_DEFAULT[k]
+        : (v === true || v === "true" || v === 1 || v === "1");
+    });
+    return out;
+  }
+
+  // المصدر: بيانات الشركة من الضبط (سحابية إن وجدت) ← مرآة settings.invFields ← الافتراضي
+  function invoicePublishFields() {
+    let raw = null;
+    try { raw = orgSettValue("invoice_fields", null); } catch (e) { raw = null; }
+    if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch (e) { raw = null; } }
+    if (!raw || typeof raw !== "object") raw = (settings && settings.invFields) || null;
+    return normalizeInvFields(raw && typeof raw === "object" ? raw : null);
+  }
+
+  // اسم المنشأة للمطبوعات (نفس ترتيب printSection القديم)
+  function invOrgName() {
+    const settOrg = (csetData && csetData.org) || (ssetData && ssetData.org);
+    return (settOrg && settOrg.name) || (settings && settings.orgName) ||
+      (DATA.org && DATA.org() && DATA.org().name) || "مؤسستي التجارية";
+  }
+
+  // تعبئة ترويسة الفاتورة ببيانات المنشأة حسب الصناديق المختارة
+  function fillInvoiceOrgHead(prefix) {
+    const f = invoicePublishFields();
+    const ids = prefix === "inv"
+      ? { name: "invOrgName", address: "invOrgAddress", phone: "invOrgPhone", vat: "invOrgVat" }
+      : { name: "ppOrgName", address: "ppOrgAddress", phone: "ppOrgPhone", vat: "ppOrgVat" };
+    const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    set(ids.name, f.name ? String(invOrgName()) : "");
+    const addr = f.address ? String(orgSettValue("address", (settings && settings.orgAddress) || "") || "").trim() : "";
+    const phone = f.phone ? String(orgSettValue("phone", (settings && settings.orgPhone) || "") || "").trim() : "";
+    const vat = f.tax_number ? String(orgSettValue("tax_number", (settings && settings.orgVat) || "") || "").trim() : "";
+    set(ids.address, addr ? "العنوان: " + addr : "");
+    set(ids.phone, phone ? "هاتف: " + phone : "");
+    set(ids.vat, vat ? "الرقم الضريبي: " + vat : "");
+    return f;
+  }
+
+  // ملاحظات وشروط تطبع أسفل الفاتورة (سطر المنشأة + الضمان)
+  function invNotesHtml(isSale) {
+    const note = String(orgSettValue("org_note", (settings && settings.orgNote) || "") || "").trim();
+    const warranty = String(orgSettValue("warranty_terms", (settings && settings.orgWarranty) || "") || "").trim();
+    let h = "";
+    if (note) h += '<p><span class="inv-notes-title">ملاحظات: </span>' + esc(note) + '</p>';
+    if (warranty) h += '<p><span class="inv-notes-title">شروط الضمان: </span>' + esc(warranty) + '</p>';
+    if (!h) h = '<p class="inv-empty">' + (isSale ? "شكراً لتعاملكم معنا." : "رجاءً التأكد من البضاعة عند الاستلام.") + '</p>';
+    return h;
+  }
+
+  // بلوك الإجماليات (بدل سطر « | » القديم)
+  function invTotalsHtml(rows) {
+    return rows.map((r) =>
+      '<div class="inv-total-row' + (r.grand ? " grand" : "") + '"><span>' + esc(r.label) +
+      '</span><b>' + r.value + '</b></div>').join("");
+  }
+
+  function invTotalRows(isSale, inv) {
+    const taxLabel = String(orgSettValue("tax_title", "") || "الضريبة").trim() || "الضريبة";
+    const rows = [{ label: "المجموع", value: fmt(inv.subTotal) + " ج.م" }];
+    if (Number(inv.discountAmount)) rows.push({ label: "الخصم الإضافي", value: fmt(inv.discountAmount) + " ج.م" });
+    if ((inv.taxAmount > 0) || (TAX.enabled && TAX.rate > 0)) rows.push({ label: taxLabel, value: fmt(inv.taxAmount) + " ج.م" });
+    const rt = retTotalsFor(isSale, inv);
+    if (rt.count) {
+      rows.push({ label: "الصافي النهائي", value: fmt(inv.grandTotal) + " ج.م" });
+      rows.push({ label: "المرتجعات (" + rt.count + ")", value: fmt(rt.value) + " ج.م" });
+      rows.push({ label: "الصافي بعد المرتجعات", value: fmt(Math.max(0, (Number(inv.grandTotal) || 0) - rt.value)) + " ج.م", grand: true });
+    } else {
+      rows.push({ label: "الصافي النهائي", value: fmt(inv.grandTotal) + " ج.م", grand: true });
+    }
+    return rows;
+  }
+
+  /* ===== حجم ورق الطباعة من الضبط (A4 / A5 / حراري 80mm) ===== */
+  function printPaperSize() {
+    let p = "";
+    try { p = String(orgSettValue("paper_size", (settings && settings.paperSize) || "A4") || "A4").toLowerCase().trim(); } catch (e) { p = "a4"; }
+    if (p === "a5") return "a5";
+    if (p.indexOf("thermal") === 0 || p.indexOf("حراري") === 0 || p === "80mm") return "thermal";
+    return "a4";
+  }
+
+  function applyPrintPaper(el) {
+    const z = printPaperSize();
+    el.classList.remove("paper-a4", "paper-a5", "paper-thermal");
+    el.classList.add("paper-" + z);
+    let st = document.getElementById("mizanPrintPageSize");
+    if (!st) { st = document.createElement("style"); st.id = "mizanPrintPageSize"; document.head.appendChild(st); }
+    st.textContent = z === "a5" ? "@page { size: A5; margin: 8mm; }"
+      : z === "thermal" ? "@page { size: 80mm auto; margin: 3mm; }"
+      : "@page { size: A4; margin: 10mm; }";
+    return z;
+  }
+
   function printSection(el) {
     // اسم الشركة من الضبط (لكل شركة على حدة) يظهر في كل صفحات الطباعة
-    const settOrg = (csetData && csetData.org) || (ssetData && ssetData.org);
-    const settName = settOrg && settOrg.name;
-    const org = settName || (settings && settings.orgName ? settings.orgName : (DATA.org() && DATA.org().name) || "مؤسستي التجارية");
-    [["invOrgName"], ["ppOrgName"], ["stmOrgName"], ["skOrgName"], ["blpOrgName"], ["trpOrgName"]].forEach(([id]) => {
+    // ملاحظة: صفحتا الفاتورة (بيع/شراء) تملآن ترويستهما بنفسها احترامًا لصناديق «على الفاتورة».
+    const org = invOrgName();
+    [["stmOrgName"], ["skOrgName"], ["blpOrgName"], ["trpOrgName"]].forEach(([id]) => {
       const x = document.getElementById(id);
       if (x) x.textContent = org;
     });
+    applyPrintPaper(el);
     document.querySelectorAll(".print-only").forEach((s) => s.classList.remove("print-target"));
     el.classList.add("print-target");
     document.body.classList.add("printing");
     const cleanup = () => {
       el.classList.remove("print-target");
+      el.classList.remove("paper-a4", "paper-a5", "paper-thermal");
       document.body.classList.remove("printing");
       window.removeEventListener("afterprint", cleanup);
     };
@@ -1363,7 +1468,7 @@
     $("#lblWalletTo").hidden = !isWallet;
     $("#pWalletTo").hidden = !isWallet;
     if (isWallet) {
-      $("#pWalletFrom").value = "01555304378";
+      $("#pWalletFrom").value = "01002655282";
       const cid = parseInt($("#pCust").value, 10);
       const c = customers.find((x) => x.id === cid);
       $("#pWalletTo").value = (c && c.walletPhone) ? c.walletPhone : "";
@@ -1446,7 +1551,7 @@
 
   function openActions(cust) {
     actionsCust = cust;
-    $("#actTitle").textContent = "👤 إدارة العميل: " + cust.nameAr + " (" + cust.code + ") - By Adel Samir - واتس: 01555304378";
+    $("#actTitle").textContent = "👤 إدارة العميل: " + cust.nameAr + " (" + cust.code + ") - By Adel Samir - واتس: 01002655282";
     const canD105 = canManageDocs();
     $("#actDocScan").hidden = !canD105; $("#actDocPick").hidden = !canD105; $("#actDocList").hidden = !canD105;
     $("#actName").textContent = "👤 العميل: " + cust.nameAr;
@@ -1601,8 +1706,10 @@
         csetData = p;
         csetData.__online = true;
         if (p.org) {
-          if (p.org.name) settings.orgName = p.org.name;
-          if (!settings.orgAddress && p.org.address) settings.orgAddress = p.org.address;
+          // بيانات المنشأة (بما فيها «انشر على الفاتورة») تتخزن محليًا كمرآة سريعة للمطبوعات
+          try { mirrorOrgToSettings(p.org); } catch (e) {
+            if (p.org.name) settings.orgName = p.org.name;
+          }
         }
       }
       applyTaxSettingsFromSett(p);
@@ -2591,12 +2698,10 @@
         '<td>' + fmt(it.total) + '</td>';
       tb.appendChild(tr);
     });
-    let footStr = "المجموع: <b>" + fmt(inv.subTotal) + " ج.م</b>";
-    if (inv.discountAmount) footStr += " | الخصم الإضافي: <b>" + fmt(inv.discountAmount) + " ج.م</b>";
-    if (hasTax) footStr += " | الضريبة: <b>" + fmt(inv.taxAmount) + " ج.م</b>";
-    footStr += " | الصافي النهائي: <b>" + fmt(inv.grandTotal) + " ج.م</b>";
-    footStr += retFootNote(true, inv);
-    $("#invFootPrint").innerHTML = footStr;
+    fillInvoiceOrgHead("inv");
+    const nt = $("#invNotesPrint");
+    if (nt) nt.innerHTML = invNotesHtml(true);
+    $("#invFootPrint").innerHTML = invTotalsHtml(invTotalRows(true, inv));
     printSection($("#invoicePage"));
   }
 
@@ -3074,12 +3179,10 @@
         '<td>' + fmt(it.total) + '</td>';
       tb.appendChild(tr);
     });
-    let footStr = "المجموع: <b>" + fmt(inv.subTotal) + " ج.م</b>";
-    if (inv.discountAmount) footStr += " | الخصم الإضافي: <b>" + fmt(inv.discountAmount) + " ج.م</b>";
-    if (hasTax) footStr += " | الضريبة: <b>" + fmt(inv.taxAmount) + " ج.م</b>";
-    footStr += " | الصافي النهائي: <b>" + fmt(inv.grandTotal) + " ج.م</b>";
-    footStr += retFootNote(false, inv);
-    $("#ppFoot").innerHTML = footStr;
+    fillInvoiceOrgHead("pp");
+    const pnt = $("#ppNotesPrint");
+    if (pnt) pnt.innerHTML = invNotesHtml(false);
+    $("#ppFoot").innerHTML = invTotalsHtml(invTotalRows(false, inv));
     printSection($("#purchasePage"));
   }
 
@@ -5158,6 +5261,12 @@
     toast("تم الحذف محليًا. اضغط «حفظ جميع تبويبات» لحفظه.", "info");
   };
 
+  // مُحوّل معرّفات حقول الضبط: شاشة العميل بادئتها «c» (csetOrgName) وشاشة المالك
+  // بلا بادئة (setOrgName). المحاولة بالبادئة ثم بدونها تصلح الحقل في الشاشتين.
+  function settFieldEl(prefix, name) {
+    return document.getElementById(prefix + name) || document.getElementById(name);
+  }
+
   // تعبئة حقول بيانات المنشأة / الضريبة من كائن org (سحابة)
   function settFillOrgFields(prefix) {
     const p = settPayload(prefix);
@@ -5169,37 +5278,66 @@
       let sr = Number(settings.taxRate);
       rt = sr > 1 ? sr : Math.round(sr * 100);
     }
-    const g = (sel, val) => { const el = document.querySelector(sel); if (el) el.value = val == null ? "" : String(val); };
-    g("#" + prefix + "setOrgName", org.name || "");
-    g("#" + prefix + "setOrgPhone", org.phone || "");
-    g("#" + prefix + "setOrgAddress", org.address || "");
-    g("#" + prefix + "setOrgVat", org.tax_number || "");
-    g("#" + prefix + "setOrgNote", org.org_note || "");
-    g("#" + prefix + "setTaxEnabled", en ? "1" : "0");
-    g("#" + prefix + "setTaxRate", rt || (en ? "14" : "0"));
-    g("#" + prefix + "setTaxTitle", org.tax_title || "");
-    g("#" + prefix + "setPaper", org.paper_size || "A4");
-    g("#" + prefix + "setWarranty", org.warranty_terms || "");
+    const g = (name, val) => { const el = settFieldEl(prefix, name); if (el) el.value = val == null ? "" : String(val); };
+    g("setOrgName", org.name || "");
+    g("setOrgPhone", org.phone || "");
+    g("setOrgAddress", org.address || "");
+    g("setOrgVat", org.tax_number || "");
+    g("setOrgNote", org.org_note || "");
+    g("setTaxEnabled", en ? "1" : "0");
+    g("setTaxRate", rt || (en ? "14" : "0"));
+    g("setTaxTitle", org.tax_title || "");
+    g("setPaper", org.paper_size || "A4");
+    g("setWarranty", org.warranty_terms || "");
+    // صناديق «على الفاتورة» (ترحيل ٣٣)
+    const f = normalizeInvFields(org.invoice_fields);
+    [["setInvName", "name"], ["setInvPhone", "phone"], ["setInvAddress", "address"], ["setInvVat", "tax_number"]]
+      .forEach(([id, k]) => { const el = settFieldEl(prefix, id); if (el) el.checked = !!f[k]; });
   }
 
   // قراءة حقول بيانات المنشأة / الضريبة إلى كائن org (قبل الحفظ)
   function settReadOrgFields(prefix) {
     const p = settPayload(prefix);
     const org = p.org || {};
-    const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ""; };
-    org.name = v(prefix + "setOrgName");
-    org.phone = v(prefix + "setOrgPhone");
-    org.address = v(prefix + "setOrgAddress");
-    org.tax_number = v(prefix + "setOrgVat");
-    org.org_note = v(prefix + "setOrgNote");
-    org.tax_enabled = (v(prefix + "setTaxEnabled") === "1");
-    const rawRate = parseFloat(String(v(prefix + "setTaxRate")).replace(/[^\d.-]/g, "")) || 0;
-    org.tax_rate = rawRate;
-    org.tax_title = v(prefix + "setTaxTitle");
-    org.paper_size = v(prefix + "setPaper") || "A4";
-    org.warranty_terms = v(prefix + "setWarranty");
+    const v = (name) => { const el = settFieldEl(prefix, name); return el ? el.value.trim() : null; };
+    // لو الحقل مش موجود في الواجهة نترك القيمة كما هي (ولا نمسحها بإرسال فاضي)
+    const put = (key, name) => { const val = v(name); if (val !== null) org[key] = val; };
+    put("name", "setOrgName");
+    put("phone", "setOrgPhone");
+    put("address", "setOrgAddress");
+    put("tax_number", "setOrgVat");
+    put("org_note", "setOrgNote");
+    const taxSel = v("setTaxEnabled");
+    if (taxSel !== null) org.tax_enabled = (taxSel === "1");
+    const rawRateStr = v("setTaxRate");
+    if (rawRateStr !== null) org.tax_rate = parseFloat(String(rawRateStr).replace(/[^\d.-]/g, "")) || 0;
+    put("tax_title", "setTaxTitle");
+    const paper = v("setPaper");
+    org.paper_size = paper || org.paper_size || "A4";
+    put("warranty_terms", "setWarranty");
+    const chk = (id) => { const el = settFieldEl(prefix, id); return el ? el.checked === true : true; };
+    org.invoice_fields = {
+      name: chk("setInvName"),
+      address: chk("setInvAddress"),
+      phone: chk("setInvPhone"),
+      tax_number: chk("setInvVat")
+    };
     p.org = org;
     return org;
+  }
+
+  // مرآة محلية داخل settings: أي جهاز يقرأ نفس الاختيار حتى من غير شبكة
+  function mirrorOrgToSettings(org) {
+    if (!org) return;
+    if (org.name != null) settings.orgName = org.name;
+    if (org.phone != null) settings.orgPhone = org.phone;
+    if (org.address != null) settings.orgAddress = org.address;
+    if (org.tax_number != null) settings.orgVat = org.tax_number;
+    if (org.org_note != null) settings.orgNote = org.org_note;
+    if (org.warranty_terms != null) settings.orgWarranty = org.warranty_terms;
+    if (org.paper_size != null) settings.paperSize = org.paper_size;
+    if (org.invoice_fields) settings.invFields = normalizeInvFields(org.invoice_fields);
+    try { saveSettings(); } catch (e) {}
   }
 
   // ================== العميل: تحميل وحفظ تبويبات شركته ==================
@@ -5214,6 +5352,8 @@
           if (csetData.org.tax_enabled !== undefined && csetData.org.tax_enabled !== null) {
             applyTaxSettings(csetData.org.tax_enabled, csetData.org.tax_rate);
           }
+          // مرآة محلية: الفاتورة تقرأ بيانات المنشأة واختيار «على الفاتورة» من نفس المصدر
+          try { mirrorOrgToSettings(csetData.org); } catch (e) {}
         }
         applySettFeatureGatingClient();
         renderAllSettPanes("c");
@@ -5222,7 +5362,7 @@
       return;
     }
     csetData = {
-      org: { name: settings.orgName || "", phone: settings.orgPhone || "", address: settings.orgAddress || "", tax_number: settings.orgVat || "", org_note: settings.orgNote || "", tax_enabled: !!settings.taxEnabled, tax_rate: Math.round((settings.taxRate || 0) * 100), tax_title: "", paper_size: "A4", warranty_terms: "" },
+      org: { name: settings.orgName || "", phone: settings.orgPhone || "", address: settings.orgAddress || "", tax_number: settings.orgVat || "", org_note: settings.orgNote || "", tax_enabled: !!settings.taxEnabled, tax_rate: Math.round((settings.taxRate || 0) * 100), tax_title: "", paper_size: settings.paperSize || "A4", warranty_terms: settings.orgWarranty || "", invoice_fields: normalizeInvFields(settings.invFields) },
       categories: [], units: [], warehouses: [], owners: [], wallets: [], banks: []
     };
     renderAllSettPanes("c");
@@ -5237,8 +5377,7 @@
     const payload = gatherSettPayload("c");
     const doAfter = () => {
       applyTaxSettings(payload.org.tax_enabled, payload.org.tax_rate);
-      settings.orgName = payload.org.name;
-      saveSettings();
+      mirrorOrgToSettings(payload.org);
       addActivity("إعدادات", "تعديل إعدادات المؤسسة");
       toast("تم حفظ إعدادات مؤسستك بنجاح.", "success");
     };
@@ -5293,8 +5432,9 @@
     const after = () => {
       if (payload.org) {
         applyTaxSettings(payload.org.tax_enabled, payload.org.tax_rate);
-        settings.orgName = payload.org.name;
-        saveSettings();
+        // المرآة المحلية بتاعة الفاتورة بتاعة «شاشة العميل بشركته» بس —
+        // مفيش منطق إن إعدادات شركة تانية تدخل في إعدادات المالك المحلي.
+        if (prefix === "c") mirrorOrgToSettings(payload.org);
       }
       renderAllSettPanes(prefix);
       // الضبط هو المرجع → حدّث القوائم الحية بعد الحفظ مباشرة
@@ -6419,16 +6559,19 @@
   function showLogin() {
     // 🛡 تنظيف أي أثر للحساب السابق (الخروج لازم يمسح الهوية مش البيانات فقط)
     resetSessionState();
+    hideLoginExpiry();
     $("#loginScreen").hidden = false;
     $("#orgScreen").hidden = true;
     $("#memberScreen").hidden = true;
   }
   function showOrgScreen() {
+    hideLoginExpiry();
     $("#loginScreen").hidden = true;
     $("#orgScreen").hidden = false;
     $("#memberScreen").hidden = true;
   }
   function hideScreens() {
+    hideLoginExpiry();
     $("#bootSplash").hidden = true;
     $("#loginScreen").hidden = true;
     $("#orgScreen").hidden = true;
@@ -6509,7 +6652,14 @@ const pwEye = document.getElementById("btnShowPass");
             setAuthMsg(m, "هذا ليس حساب شركة. استخدم تبويب «تسجيل دخول مستخدم».", "err");
             return;
           }
-          showMembersScreen();
+          // بوابة الانتهاء (بناء ١١٠): صاحب الشركة المنتهي ما يشوفش شاشة حساباته
+          setAuthMsg(m, "جارٍ التحقق من الصلاحية...", "");
+          DATA.requestAccess().then((acc) => {
+            if (!(acc && acc.allowed)) { showDeny(acc); return; }
+            hideLoginExpiry();
+            setAuthMsg(m, "", "");
+            showMembersScreen();
+          }).catch(() => { showDeny(null); });
           return;
         }
         proceedOnline(m, username);
@@ -6661,7 +6811,17 @@ const pwEye = document.getElementById("btnShowPass");
     // مدير الشركة (غير المالك) حقه يدخل شاشة «حسابات شركتك» قبل البرنامج
     // (bypassMembers = true فقط عند الضغط على زر «دخول البرنامج» من شاشة حسابات الشركة)
     const p0 = DATA.getProfile();
-    if (!bypassMembers && isOrgAdmin(p0)) { showMembersScreen(); return; }
+    if (!bypassMembers && isOrgAdmin(p0)) {
+      // بوابة الصلاحية الأول (بناء ١١٠): المنتهي أو المقفول يشوف رسالة الدعم على شاشة
+      // الدخول — مفيش دخول شاشة «حسابات شركتك» قبل ما نتأكد إن الاشتراك ساري.
+      stage("جاري التحقق من الصلاحية...");
+      DATA.requestAccess().then((acc) => {
+        if (!(acc && acc.allowed)) { showDeny(acc); return; }
+        hideLoginExpiry();
+        showMembersScreen();
+      }).catch(() => { showDeny(null); });
+      return;
+    }
     A.online = true;
     A.adopting = true;
     // 🛡 عزل الشركات: مانبقاش ببيانات أي حساب سابق قبل ما نبدأ التحميل
@@ -7112,26 +7272,53 @@ const pwEye = document.getElementById("btnShowPass");
   }
 
   /* ================== شاشة "غير متاح" (وقت/قفل/حجب) ================== */
+  // صناديق رسالة الانتهاء فوق شاشة الدخول (بناء ١١٠)
+  function showLoginExpiry(text) {
+    const exp = document.getElementById("loginExpiry");
+    if (!exp) return false;
+    const t = document.getElementById("loginExpiryText");
+    if (t && text) t.textContent = text;
+    exp.hidden = false;
+    return true;
+  }
+  function hideLoginExpiry() {
+    const exp = document.getElementById("loginExpiry");
+    if (exp) exp.hidden = true;
+  }
+
   function showDeny(acc) {
     const reasons = {
-      plan: "انتهت مدة اشتراك شركتك. تواصل مع المالك لتجديدها.",
-      locked: "شركتك مقفلة حاليًا من المالك. حاول لاحقًا.",
+      plan: "انتهت فترة إشتراكك تواصل مع الدعم الفنى لشركة ميزان لإعادة تفعيل باقة الإشتراك",
+      locked: "شركتك مقفولة حاليًا من إدارة ميزان — تواصل مع الدعم الفنى لإعادة التفعيل",
       blocked: "عضوك حديثًا محظور. تواصل مع مالك الشركة.",
       noprofile: "لا يوجد حساب مرتبط بشركة.",
       noorganization: "لا توجد شركة مرتبطة بحسابك."
     };
+    let msg;
+    if (!acc) msg = "تعذّر التحقق من اشتراكك — جرّب الدخول بعد لحظات.";
+    else if (acc.reason === "plan" && acc.plan_end) {
+      msg = "انتهت فترة إشتراكك بتاريخ " + String(acc.plan_end).slice(0, 10) + " — تواصل مع الدعم الفنى لشركة ميزان لإعادة تفعيل باقة الإشتراك";
+    } else msg = reasons[acc.reason] || "لا يمكنك الدخول حاليًا.";
+
+    // المنتهي أو المقفول: يفضل في شاشة تسجيل الدخول وتشوف الرسالة + زر الواتس
+    // (بدل ما يدخل شاشة حسباته وصلاحياتها — ده كان الغلط اللي اتصلّح في بناء ١١٠)
+    const onLogin = !!(acc && (acc.reason === "plan" || acc.reason === "locked"));
+    if (onLogin) {
+      $("#denyScreen").hidden = true;
+      $("#orgScreen").hidden = true;
+      $("#memberScreen").hidden = true;
+      $("#loginScreen").hidden = false;
+      showLoginExpiry(msg);
+      const m = document.getElementById("authMsg");
+      if (m) { m.textContent = ""; m.className = "login-msg"; }
+      return;
+    }
+    hideLoginExpiry();
     $("#loginScreen").hidden = true;
     $("#orgScreen").hidden = true;
     $("#denyScreen").hidden = false;
-    const a = DATA.accessInfo();
     const msgEl = $("#denyMsg");
-    if (!acc) {
-      msgEl.textContent = "تعذّر التحقق من اشتراكك.";
-    } else if (acc.reason === "plan" && acc.plan_end) {
-      msgEl.textContent = "أشتراك شركتك منتهي بتاريخ " + acc.plan_end + ". تواصل مع المالك للتفعيل.";
-    } else {
-      msgEl.textContent = reasons[acc.reason] || "لا يمكنك الدخول حاليًا.";
-    }
+    msgEl.textContent = msg;
     msgEl.className = "login-msg err";
   }
 
@@ -7391,61 +7578,112 @@ const pwEye = document.getElementById("btnShowPass");
     }
   }
 
+  // ===== بحث لوحة الإدارة (بناء 110) =====
+  // التطبيع العربي موجود في normalizeAr — نضيف عليه ضغط المسافات عشان البحث متعدد الكلمات
+  function admNorm(s) {
+    return normalizeAr(s).replace(/\s+/g, " ").trim();
+  }
+  function admDigits(s) {
+    return String(s || "").replace(/\D/g, "");
+  }
+  function admFilterValue(id) {
+    const el = document.getElementById(id);
+    return el ? String(el.value || "") : "";
+  }
+  // صندوق «الاسم أو التليفون»: رقم → يطابق التليفون، حرف → يطابق اسم الشركة أو اسم المسئول
+  function adminOrgMatches(o, qOrg, qUser) {
+    if (qOrg) {
+      const digits = qOrg.replace(/\D/g, "");
+      const text = qOrg.replace(/[0-9\-+().]/g, "").trim();
+      let hit = false;
+      if (digits && admDigits(o.org_phone).indexOf(digits) !== -1) hit = true;
+      if (!hit && text) {
+        if (admNorm(o.org_name).indexOf(text) !== -1) hit = true;
+        else if (admNorm(o.owner_name).indexOf(text) !== -1) hit = true;
+      }
+      if (!hit) return false;
+    }
+    if (qUser && admNorm(o.admin_username).indexOf(qUser) === -1) return false;
+    return true;
+  }
+
+  function paintAdminOrgTable(orgs) {
+    const box = $("#adminList");
+    if (!box) return;
+    const list = orgs || adminOrgsCache || [];
+    const qOrg = admNorm(admFilterValue("admSearchOrg"));
+    const qUser = admNorm(admFilterValue("admSearchUser"));
+    const searching = !!(qOrg || qUser);
+    const filtered = searching ? list.filter((o) => adminOrgMatches(o, qOrg, qUser)) : list;
+    const info = $("#admSearchInfo");
+    if (info) info.textContent = searching ? ("🔎 " + filtered.length + " من " + list.length + " شركة") : "";
+    if (!list.length) {
+      box.innerHTML = '<p class="login-sub">لا توجد شركات بعد.</p>';
+      return;
+    }
+    if (!filtered.length) {
+      box.innerHTML = '<p class="login-sub">لا توجد شركة مطابقة لبيانات البحث — جرّب اسمًا أقصر أو رقم تليفون جزئي.</p>';
+      return;
+    }
+    let h = '<p class="login-sub" style="margin-bottom:8px">💡 اضغط على أي شركة <b>ضغطتين</b> (دبل كليك) لفتح شاشة بياناتها وتعديلها في أي وقت.</p>' +
+      '<table class="data-table"><thead><tr>' +
+      '<th>الشركة</th><th>يوزر نيم</th><th>تليفون المسئول</th><th>المالك</th><th>الأعضاء</th><th>من تاريخ</th><th>إلى تاريخ</th>' +
+      '<th>الحالة</th><th>آخر اتصال</th><th>المزايا</th><th>إجراءات</th></tr></thead><tbody>';
+    filtered.forEach((o) => {
+      const locked = !!o.locked;
+      const until = daysUntil(o.plan_end);
+      let status;
+      if (locked) {
+        status = '<span class="badge-no">🔴 مقفلة</span>';
+      } else if ((o.plan_status === "expired" || until < 0) && o.plan_end) {
+        status = '<span class="badge-no">🔴 منتهية</span>';
+      } else if (until !== null && until >= 0 && until <= 7 && o.plan_end) {
+        status = '<span class="badge-warn">🟠 تنتهي خلال ' + until + " يوم</span>";
+      } else if (o.plan_status === "active" || until === null) {
+        status = '<span class="badge-ok">🟢 نشطة</span>';
+      } else {
+        status = '<span class="badge-no">🔴 ' + (o.plan_status || "متوقفة") + "</span>";
+      }
+      h += "<tr data-org=\"" + o.org_id + "\" onclick=\"window.__admDbl('" + o.org_id + "')\" style=\"cursor:pointer\" title=\"اضغط ضغطتين لتعديل بيانات الشركة\">" +
+        "<td><b>" + (o.org_name || "بدون اسم") + (o.protected ? ' <span class="badge-ok" title="شركة المالك — محمية من الحذف">🔒</span>' : "") + "</b></td>" +
+        "<td><code>" + (o.admin_username || "—") + "</code></td>" +
+        "<td>" + (o.org_phone || "—") + "</td>" +
+        "<td>" + (o.owner_name || "—") + "</td>" +
+        "<td>" + (o.members || 0) + " / " + (o.max_members || 5) + "</td>" +
+        "<td>" + fmtDate(o.plan_start) + "</td>" +
+        "<td>" + fmtDate(o.plan_end) + "</td>" +
+        "<td>" + status + "</td>" +
+        '<td style="white-space:nowrap">' + (o.online
+          ? '<span style="color:var(--success);font-weight:800">🟢 متصل الآن</span>'
+          : '<span style="color:#ff5b5b;font-weight:800">' + (o.last_seen ? fmtDateTime(o.last_seen) : "لم يتصل بعد") + "</span>") + "</td>" +
+        "<td><button class=\"btn small teal\" type=\"button\" onclick=\"event.stopPropagation();window.__admFeats('" + o.org_id + "')\">⚙️ المزايا</button></td>" +
+        "<td><button class=\"btn small blue\" type=\"button\" onclick=\"event.stopPropagation();window.__admDbl('" + o.org_id + "')\">✏️ بيانات الشركة</button> " +
+        (o.protected
+          ? '<span class="login-sub" title="شركة رئيسية تخص المالك">🔒 لا تُحذف</span>'
+          : "<button class=\"btn small red\" type=\"button\" onclick=\"event.stopPropagation();window.__admDel('" + o.org_id + "')\">🗑 حذف</button>") +
+        "</td>" +
+        "</tr>";
+    });
+    h += "</tbody></table>";
+    box.innerHTML = h;
+  }
+
   function renderAdminOrgs() {
     const box = $("#adminList");
     box.innerHTML = '<p class="login-sub">جارٍ تحميل الشركات...</p>';
     DATA.adminOrgs().then((orgs) => {
-      if (!orgs || !orgs.length) {
-        box.innerHTML = '<p class="login-sub">لا توجد شركات بعد.</p>';
-        renderAdminStats(orgs || []);
-        return;
-      }
-      renderAdminStats(orgs);
-      renderAdminAlerts(orgs);
-      let h = '<p class="login-sub" style="margin-bottom:8px">💡 اضغط على أي شركة <b>ضغطتين</b> (دبل كليك) لفتح شاشة بياناتها وتعديلها في أي وقت.</p>' +
-        '<table class="data-table"><thead><tr>' +
-        '<th>الشركة</th><th>يوزر نيم</th><th>تليفون المسئول</th><th>المالك</th><th>الأعضاء</th><th>من تاريخ</th><th>إلى تاريخ</th>' +
-        '<th>الحالة</th><th>آخر اتصال</th><th>المزايا</th><th>إجراءات</th></tr></thead><tbody>';
-      orgs.forEach((o) => {
-        const locked = !!o.locked;
-        const until = daysUntil(o.plan_end);
-        let status;
-        if (locked) {
-          status = '<span class="badge-no">🔴 مقفلة</span>';
-        } else if ((o.plan_status === "expired" || until < 0) && o.plan_end) {
-          status = '<span class="badge-no">🔴 منتهية</span>';
-        } else if (until !== null && until >= 0 && until <= 7 && o.plan_end) {
-          status = '<span class="badge-warn">🟠 تنتهي خلال ' + until + " يوم</span>";
-        } else if (o.plan_status === "active" || until === null) {
-          status = '<span class="badge-ok">🟢 نشطة</span>';
-        } else {
-          status = '<span class="badge-no">🔴 ' + (o.plan_status || "متوقفة") + "</span>";
-        }
-        h += "<tr data-org=\"" + o.org_id + "\" onclick=\"window.__admDbl('" + o.org_id + "')\" style=\"cursor:pointer\" title=\"اضغط ضغطتين لتعديل بيانات الشركة\">" +
-          "<td><b>" + (o.org_name || "بدون اسم") + (o.protected ? ' <span class="badge-ok" title="شركة المالك — محمية من الحذف">🔒</span>' : "") + "</b></td>" +
-          "<td><code>" + (o.admin_username || "—") + "</code></td>" +
-          "<td>" + (o.org_phone || "—") + "</td>" +
-          "<td>" + (o.owner_name || "—") + "</td>" +
-          "<td>" + (o.members || 0) + " / " + (o.max_members || 5) + "</td>" +
-          "<td>" + fmtDate(o.plan_start) + "</td>" +
-          "<td>" + fmtDate(o.plan_end) + "</td>" +
-          "<td>" + status + "</td>" +
-          '<td style="white-space:nowrap">' + (o.online
-            ? '<span style="color:var(--success);font-weight:800">🟢 متصل الآن</span>'
-            : '<span style="color:#ff5b5b;font-weight:800">' + (o.last_seen ? fmtDateTime(o.last_seen) : "لم يتصل بعد") + "</span>") + "</td>" +
-          "<td><button class=\"btn small teal\" type=\"button\" onclick=\"event.stopPropagation();window.__admFeats('" + o.org_id + "')\">⚙️ المزايا</button></td>" +
-          "<td><button class=\"btn small blue\" type=\"button\" onclick=\"event.stopPropagation();window.__admDbl('" + o.org_id + "')\">✏️ بيانات الشركة</button> " +
-          (o.protected
-            ? '<span class="login-sub" title="شركة رئيسية تخص المالك">🔒 لا تُحذف</span>'
-            : "<button class=\"btn small red\" type=\"button\" onclick=\"event.stopPropagation();window.__admDel('" + o.org_id + "')\">🗑 حذف</button>") +
-          "</td>" +
-          "</tr>";
-      });
-      h += "</tbody></table>";
-      box.innerHTML = h;
+      const list = orgs || [];
+      renderAdminStats(list);
+      renderAdminAlerts(list);
+      paintAdminOrgTable(list);
     }).catch((e) => {
       box.innerHTML = '<p class="login-msg err">تعذّر تحميل الشركات: ' + (e.message || e) + "</p>";
     });
+  }
+
+  // الكتابة في صندوق البحث تعيد الرسم من الكاش فقط — بدون طلب شبكة جديد
+  function onAdminSearchInput() {
+    if (document.getElementById("adminList")) paintAdminOrgTable();
   }
 
   window.__admMembers = function (orgId) {
@@ -8837,6 +9075,17 @@ const pwEye = document.getElementById("btnShowPass");
   function setupAdmin() {
     $("#btnAdmin").addEventListener("click", openAdmin);
     $("#btnAdminRefresh").addEventListener("click", renderAdminOrgs);
+    const so = $("#admSearchOrg");
+    const su = $("#admSearchUser");
+    if (so) so.addEventListener("input", onAdminSearchInput);
+    if (su) su.addEventListener("input", onAdminSearchInput);
+    const clearBtn = $("#btnAdminSearchClear");
+    if (clearBtn) clearBtn.addEventListener("click", () => {
+      if (so) so.value = "";
+      if (su) su.value = "";
+      paintAdminOrgTable();
+      if (so) so.focus();
+    });
     const btnAddOrg = $("#btnAdminAddOrg");
     if (btnAddOrg) btnAddOrg.addEventListener("click", () => openOrgModal());
     const btnLog = $("#btnAdminLog");
