@@ -111,6 +111,54 @@
     try { if (DATA.onSyncError) DATA.onSyncError(what, err); } catch (e) { }
   }
 
+  // 🆕 إصلاح «الوحدة فاضية في الفاتورة»: الوحدة كانت بتضيع لأن جدول products على السحابة
+  // مالوش عمود unit، فـ fromCloud كانت بترجعلها "" ثابت → كل صنف بيفقد وحدته بعد أول
+  // تنزيل، والفواتير الجديدة بتتسجّل بوحدة فاضية. الحلول:
+  //   1) ترحيل ٣ٻ بيضيف العمود، و toCloud بيبعت unit بس لما HAS_PRODUCT_UNIT=true (فحص مرّة).
+  //   2) لحد العمود يتنفّذ: fromCloud بياخد الوحدة من النسخة اللي في الذاكرة (localUnitOf)
+  //      بدل ما يمسيحها — فاللي مسجّله المستخدم على الجهاز ده ما يضيعش.
+  var HAS_PRODUCT_UNIT = false;
+  function localUnitOf(localId) {
+    var list = (typeof W !== "undefined" && W.products) || [];
+    for (var i = 0; i < list.length; i++) {
+      if (String(list[i].id) === String(localId)) return list[i].unit || "";
+    }
+    return "";
+  }
+  // فحص وجود العمود على السحابة: select لنفس العمود → لو مرجّعش خطأ = موجود.
+  // بينادي مرة واحدة قبل loadAll عشان أول رفع للأصناف في الجلسة يعرف يبعث unit ولا لأ.
+  function probeProductUnit() {
+    return Promise.resolve().then(function () {
+      return DATA.client().from("products").select("unit").limit(1);
+    }).then(function (r) {
+      HAS_PRODUCT_UNIT = !(r && r.error);
+      return HAS_PRODUCT_UNIT;
+    }).catch(function () { HAS_PRODUCT_UNIT = false; return false; });
+  }
+
+  // 🆕 مهمة 98: جدول «الأصول الثابتة» على السحابة بيتعمل بترحيل ٣٧، والمالك هو اللي بيأمر بتنفيذه.
+  // لحد ما يتنفّذ بنسجل الأصل محليًا وعلى الديسك زي ما هو عادي، بس ما نحاولش الرفع (مافيش جدول
+  // يرفعوله) — عشان كل حفظ ما يطلعلوش تحذير «المزامنة وقفت» وهو مالوش سبب.
+  // المهم: العلامة بتتفعّل بس لو السبب «الجدول غير موجود» فعلًا (42P01 / PGRST205).
+  // أي فشل تاني (نت مثلاً) بيسيب العلامة زي ما هي فالرفع بيحاول عادي وما بيكتمش في صمت —
+  // ده درس build 108: صمت فشل المزامنة ممنوع، والمسار الوحيد اللي بيتخطّى فيه الرفع سببه معروف وموثّق.
+  // أول ما الترحيل يتنفّذ، الفحص بيجيب الجدول موجود فالعلامة بتتمحي والرفع بيكمل من نفس اللحظة.
+  var FA_TABLE_MISSING = false;
+  function isMissingTableError(err) {
+    var msg = String((err && (err.message || err.code || err.details)) || err || "");
+    return /42P01|PGRST205|does not exist|not found/i.test(msg);
+  }
+  function probeFixedAssetsTable() {
+    if (!DATA.client()) return Promise.resolve(false);
+    return Promise.resolve()
+      .then(function () { return DATA.client().from("fixed_assets").select("id").limit(1); })
+      .then(function (r) {
+        if (r && r.error) { if (isMissingTableError(r.error)) FA_TABLE_MISSING = true; return false; }
+        FA_TABLE_MISSING = false; return true;
+      })
+      .catch(function (e) { if (isMissingTableError(e)) FA_TABLE_MISSING = true; return false; });
+  }
+
   // خريطة تحويل (محلي → سماوي / سماوي → محلي)
   var META = {
     customers: {
@@ -147,11 +195,16 @@
     products: {
       local: function () { return W.products; },
       toCloud: function (r) {
-        return { id: detUuid("products", r.id), org_id: DATA.orgId(), local_id: r.id,
+        var row = { id: detUuid("products", r.id), org_id: DATA.orgId(), local_id: r.id,
           code: r.code, barcode: r.barcode || "", name_ar: r.nameAr, name_en: r.nameEn || "",
           category: r.category || "عام", purchase_price: r.purchasePrice || 0,
           sale_price: r.salePrice || 0, stock_qty: r.qty || 0, min_stock: r.reorder || 0,
           stock: r.stock || {}, is_active: r.isActive !== false };
+        // 🆕 إصلاح «الوحدة فاضية في الفاتورة»: عمود unit بيترفع للسحابة (ترحيل ٣٩) —
+        // بس بعد ما نتأكد إن العمود موجود فعلًا، لأن رفع عمود غير معروف بيرفض طلب
+        // المزامنة كله (42703) ويوقف رفع الأصناف. الفحص بيجري مرة واحدة جوه loadAll.
+        if (HAS_PRODUCT_UNIT) row.unit = r.unit || "";
+        return row;
       },
       fromCloud: function (r) {
         var stock = r.stock; // jsonb -> object {warehouse: qty}
@@ -161,7 +214,10 @@
           if (Number(r.stock_qty || 0) > 0) stock["المخزن الرئيسي"] = Number(r.stock_qty || 0);
         }
         return { id: r.local_id, code: r.code, barcode: r.barcode || "", nameAr: r.name_ar,
-          nameEn: r.name_en || "", category: r.category || "عام", unit: "",
+          nameEn: r.name_en || "", category: r.category || "عام",
+          // 🆕 الوحدة: من العمود السحابي إن وجد، وإلا من النسخة المحلية الموجودة في الذاكرة
+          // (كانت بتتكتب "" ثابت → كل صنف بيفقد وحدته بعد أي تحميل من السحابة والفاتورة تطلع فاضية)
+          unit: String(r.unit || localUnitOf(r.local_id) || ""),
           defaultWarehouse: "المخزن الرئيسي", purchasePrice: Number(r.purchase_price || 0),
           weightedAvgCost: Number(r.purchase_price || 0), salePrice: Number(r.sale_price || 0),
           discountPercent: 0, discountStart: "", discountEnd: "",
@@ -237,6 +293,25 @@
         var lid = (r.local_id != null) ? Number(r.local_id) : (localIdFromUuid("att_settings", r.id) || 1);
         return { id: lid, workStart: r.work_start || "09:00", workEnd: r.work_end || "17:00",
           graceMin: Number(r.grace_min || 0), lunchMin: Number(r.lunch_min || 0) };
+      }
+    },
+    // 🆕 مهمة 98: الأصول الثابتة — نفس نمط الهوية (detUuid + local_id) من ترحيل ٣٧
+    fixed_assets: {
+      local: function () { return W.fixed_assets || []; },
+      toCloud: function (r) {
+        return { id: detUuid("fixed_assets", r.id), org_id: DATA.orgId(), local_id: r.id,
+          name_ar: r.nameAr || "", asset_class: r.assetClass === "intangible" ? "intangible" : "noncurrent",
+          category: r.category || "أخرى", purchase_date: r.purchaseDate || null,
+          cost: Number(r.cost || 0), accum_dep: Number(r.accumDep || 0),
+          notes: r.notes || "", is_active: r.isActive !== false, deleted: false };
+      },
+      fromCloud: function (r) {
+        var lid = (r.local_id != null) ? Number(r.local_id) : localIdFromUuid("fixed_assets", r.id);
+        return { id: lid, nameAr: r.name_ar || "",
+          assetClass: r.asset_class === "intangible" ? "intangible" : "noncurrent",
+          category: r.category || "أخرى", purchaseDate: String(r.purchase_date || "").slice(0, 10),
+          cost: Number(r.cost || 0), accumDep: Number(r.accum_dep || 0),
+          notes: r.notes || "", isActive: r.is_active !== false };
       }
     },
     accounts: {
@@ -639,6 +714,10 @@
   function syncOne(name) {
     var meta = META[name];
     if (!meta || !DATA.isOnline() || !DATA.client()) return Promise.resolve();
+    // 🆕 مهمة 98: الجدول لسه ما اتعملش على السحابة (ترحيل ٣٧ بأمر المالك) ⇒ الرفع مالوش مكان.
+    // السجل بيتحفظ محليًا + على الديسك زي ما هو، والعلامة بتتمحي أول ما الجدول يظهر.
+    // غير كده (نت مثلاً) المحاولة بتفضل عادية — صمت فشل المزامنة ممنوع (درس build 108).
+    if (name === "fixed_assets" && FA_TABLE_MISSING) return Promise.resolve();
     var local = meta.local() || [];
     var client = DATA.client();
     return client.from(name).select("id, local_id").then(function (res) {
@@ -772,8 +851,10 @@
   // تحميل كل الجداول إلى الحالة المحلية
   function loadAll() {
     W.idMap = W.idMap || {};
+    probeProductUnit(); // 🆕 نعرف هل عمود unit موجود على السحابة قبل أول رفع أصناف
+    probeFixedAssetsTable(); // 🆕 مهمة 98: هل جدول fixed_assets اتعمل على السحابة ولا الترحيل لسه ما اتنفّذش
     var names = ["customers", "suppliers", "products", "treasury", "accounts",
-      "employees", "attendance", "att_settings"];
+      "employees", "attendance", "att_settings", "fixed_assets"]; // 🆕 مهمة 98
     var eagerLoad = DATA.loadEagerAll ? DATA.loadEagerAll() : null;
     var eagerFallback = eagerLoad ? null : function (n) {
       return DATA.client().from(n).select("*").order("created_at").then(function (r) { return [n, r.error ? [] : (r.data || [])]; });
