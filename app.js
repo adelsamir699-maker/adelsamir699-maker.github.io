@@ -28,11 +28,16 @@
   const LS_SALE_RETURNS = "mizan_sale_returns_v1";
   const LS_PURCHASE_RETURNS = "mizan_purchase_returns_v1";
   const LS_SETTINGS = "mizan_settings_v1";
+  // 🆕 بناء 115: الحضور والانصراف
+  const LS_EMPLOYEES = "mizan_employees_v1";
+  const LS_ATTENDANCE = "mizan_attendance_v1";
+  const LS_ATT_SETTINGS = "mizan_att_settings_v1";
   // كل مفاتيح البيانات المحلية (مشتركة بين كل الحسابات في نفس المتصفح)
   const LS_ALL_KEYS = [
     LS_CUSTOMERS, LS_TXS, LS_PRODUCTS, LS_ACTIVITY, LS_SALES, LS_TREASURY,
     LS_SUPPLIERS, LS_SUP_TXS, LS_PURCHASES, LS_ACCOUNTS, LS_JOURNAL,
-    LS_USERS, LS_VOUCHERS, LS_SALE_RETURNS, LS_PURCHASE_RETURNS, LS_SETTINGS
+    LS_USERS, LS_VOUCHERS, LS_SALE_RETURNS, LS_PURCHASE_RETURNS, LS_SETTINGS,
+    LS_EMPLOYEES, LS_ATTENDANCE, LS_ATT_SETTINGS
   ];
   // 🛡 عزل الشركات: أي مفتاح آخر كتبته بيانات شركة معينة
   // (لو دخل حساب من شركة تانية → البيانات القديمة تُمسح قبل التحميل)
@@ -235,6 +240,10 @@
   let journalEntries = [];
   let users = [];
   let vouchers = [];
+  // 🆕 بناء 115: الحضور والانصراف (موظفون + سجل + مدة العمل)
+  let employees = [];
+  let attendance = [];
+  let attSettings = null;   // كائن واحد لكل شركة: {id, workStart, workEnd, graceMin, lunchMin}
   let settings = {};
   let editingId = null;
 
@@ -481,6 +490,9 @@
           journalEntries,
           users,
           vouchers,
+          employees,
+          attendance,
+          attSettings,
           settings,
           savedAt: new Date().toISOString()
         };
@@ -531,6 +543,12 @@
           take(data.accounts, LS_ACCOUNTS, accounts, seedAccounts, (v) => { accounts = v; }, saveAccounts);
           take(data.vouchers, LS_VOUCHERS, vouchers, seedVouchers, (v) => { vouchers = v; }, saveVouchers);
           take(data.journalEntries, LS_JOURNAL, journalEntries, seedJournal, (v) => { journalEntries = v; }, persistJournal);
+          // 🆕 بناء 115: استرجاع الحضور من الديسك (نفس شرط الفارغ/التجريبي)
+          take(data.employees, LS_EMPLOYEES, employees, undefined, (v) => { employees = v; }, saveEmployees);
+          take(data.attendance, LS_ATTENDANCE, attendance, undefined, (v) => { attendance = v; }, saveAttendance);
+          if (data.attSettings && typeof data.attSettings === "object" && (!attSettings || bootLsPresent[LS_ATT_SETTINGS] === false)) {
+            attSettings = data.attSettings; saveAttSettings(); restored = true;
+          }
           if (!restored) return;
           recalculateCustomerBalances();
           recalculateSupplierBalances();
@@ -557,6 +575,10 @@
     DB.customer_txs = txs;
     DB.vouchers = vouchers;
     DB.journalEntries = journalEntries;
+    // 🆕 بناء 115: الحضور والانصراف — att_settings سطر واحد نلفّه مصفوفة للمزامنة
+    DB.employees = employees;
+    DB.attendance = attendance;
+    DB.att_settings = attSettings ? [Object.assign({}, attSettings)] : [];
   }
 
   function pushTable(name) {
@@ -730,6 +752,10 @@
       vouchers = JSON.parse(localStorage.getItem(LS_VOUCHERS)) || seedVouchers;
       saleReturns = JSON.parse(localStorage.getItem(LS_SALE_RETURNS)) || [];
       purchaseReturns = JSON.parse(localStorage.getItem(LS_PURCHASE_RETURNS)) || [];
+      // 🆕 بناء 115: الحضور والانصراف — بدون بيانات تجريبية (شركة جديدة = قائمة فاضية)
+      employees = JSON.parse(localStorage.getItem(LS_EMPLOYEES)) || [];
+      attendance = JSON.parse(localStorage.getItem(LS_ATTENDANCE)) || [];
+      attSettings = JSON.parse(localStorage.getItem(LS_ATT_SETTINGS)) || defaultAttSettings();
       settings = Object.assign({}, defaultSettings, JSON.parse(localStorage.getItem(LS_SETTINGS)) || {});
       TAX.enabled = settings.taxEnabled == null ? TAX.enabled : Boolean(settings.taxEnabled);
       if (settings.taxRate != null) {
@@ -752,6 +778,9 @@
       vouchers = seedVouchers;
       saleReturns = [];
       purchaseReturns = [];
+      employees = [];
+      attendance = [];
+      attSettings = defaultAttSettings();
       settings = Object.assign({}, defaultSettings);
     }
     if (!localStorage.getItem(LS_CUSTOMERS)) saveCustomers();
@@ -769,6 +798,9 @@
     if (!localStorage.getItem(LS_VOUCHERS)) saveVouchers();
     if (!localStorage.getItem(LS_SALE_RETURNS)) saveSaleReturns();
     if (!localStorage.getItem(LS_PURCHASE_RETURNS)) savePurchaseReturns();
+    if (!localStorage.getItem(LS_EMPLOYEES)) saveEmployees();
+    if (!localStorage.getItem(LS_ATTENDANCE)) saveAttendance();
+    if (!localStorage.getItem(LS_ATT_SETTINGS)) saveAttSettings();
     if (!localStorage.getItem(LS_SETTINGS)) saveSettings();
   }
 
@@ -785,6 +817,23 @@
   function saveTreasury() {
     localStorage.setItem(LS_TREASURY, JSON.stringify(treasury));
     pushTable("treasury"); syncToLocalDisk();
+  }
+
+  /* ================== 🆕 بناء 115: حفظ الحضور والانصراف ================== */
+  function defaultAttSettings() {
+    return { id: 1, workStart: "09:00", workEnd: "17:00", graceMin: 10, lunchMin: 0 };
+  }
+  function saveEmployees() {
+    localStorage.setItem(LS_EMPLOYEES, JSON.stringify(employees));
+    pushTable("employees"); syncToLocalDisk();
+  }
+  function saveAttendance() {
+    localStorage.setItem(LS_ATTENDANCE, JSON.stringify(attendance));
+    pushTable("attendance"); syncToLocalDisk();
+  }
+  function saveAttSettings() {
+    localStorage.setItem(LS_ATT_SETTINGS, JSON.stringify(attSettings));
+    pushTable("att_settings"); syncToLocalDisk();
   }
 
   function saveSuppliers() {
@@ -933,7 +982,8 @@
     customers: "العملاء", suppliers: "الموردين", products: "الأصناف",
     treasury: "الخزائن", accounts: "حسابات الشجرة", vouchers: "السندات",
     journal_entries: "القيود المحاسبية", journal_lines: "أسطر القيود",
-    customer_txs: "حركة العملاء", supplier_txs: "حركة الموردين", settings: "ضبط الشركة"
+    customer_txs: "حركة العملاء", supplier_txs: "حركة الموردين", settings: "ضبط الشركة",
+    employees: "الموظفون", attendance: "سجل الحضور", att_settings: "مدة العمل"
   };
   let lastSyncWarnAt = 0;
   DATA.onSyncError = function (what, err) {
@@ -1085,6 +1135,7 @@
     stockPage: "تقرير المخزون",
     balancePage: "كشف الأرصدة",
     treStmtPage: "كشف الخزينة",
+    attReportPage: "تقرير الحضور والانصراف",
   };
   const PAPER_TITLE_FALLBACK = "مستند"; // بلا اسم منتج ولا اسم شخص
   let screenDocTitle = "";
@@ -1135,7 +1186,7 @@
   }
 
   /* ================== الروترة بين الشاشات ================== */
-  const BUILT_VIEWS = ["dashboard", "customers", "products", "sales", "purchases", "suppliers", "returns", "returnsReg", "treasury", "accounts", "journal", "balance", "treasuryStatements", "reports", "users", "audit", "settings", "clientSettings"];
+  const BUILT_VIEWS = ["dashboard", "customers", "products", "sales", "purchases", "suppliers", "returns", "returnsReg", "treasury", "accounts", "journal", "balance", "treasuryStatements", "reports", "users", "audit", "settings", "clientSettings", "attendance"];
 
   // حساب المستخدم الحالي — المصدر الموثوق هو mizan_access (فيه role + is_superadmin)
   // لأن getProfile() قد يكون null أو ناقصًا لحظة الدخول.
@@ -1187,11 +1238,30 @@
       if (!DE.featureFlag) return false;
       return DE.featureFlag("returnsManager") === true;
     }
+    // 🆕 بناء 115: الحضور والانصراف — صلاحية مستقلة opt-in بنفس نمط المرتجعات
+    if (name === "attendance") {
+      if (isSuperAcct() || isCompanyOwnerAcct()) return true;
+      if (!DE.featureFlag) return false;
+      return DE.featureFlag("attendance") === true;
+    }
+    // 🆕 بناء 115: القيود اليومية (اليدوي المحاسبي + التسجيل المبسط) — لصاحب الشركة والمالك فقط
+    if (name === "journal") return isSuperAcct() || isCompanyOwnerAcct();
     return DE.featureEnabled ? DE.featureEnabled(name) : true;
   }
 
   // صلاحية تسجيل/حذف المرتجعات (نفس بوابة الشاشة + فحص ثانٍ جوه الدوال)
   function canManageReturns() { return canUseView("returnsReg"); }
+  // 🆕 بناء 115: صلاحية الحضور والانصراف (بوابة الشاشة + فحص ثانٍ جوه دوال التسجيل/التعديل)
+  function canManageAttendance() { return canUseView("attendance"); }
+  // التعديل اليدوي لوقت/حالة سجل موجود يحتاج صلاحية مستقلة «attendanceEdit» (opt-in).
+  // التسجيل اليومي العادي ياخد وقت النظام تلقائيًا من غير إدخال.
+  // كل تعديل يدوي بيعدي عبر mizan_att_edit فيتنفَّذ على السحابة ويُسجَّل بالقديم/الجديد/السبب.
+  function canEditAttendance() {
+    if (isSuperAcct() || isCompanyOwnerAcct()) return true;
+    var DE = window.DATA || {};
+    if (!DE.featureFlag) return false;
+    return DE.featureFlag("attendanceEdit") === true;
+  }
 
   // إخفاء أزرار الشاشات غير المفعّلة في اشتراك الشركة الحالية
   function applyFeatureGating() {
@@ -1222,6 +1292,16 @@
     // 🔁 «المرتجعات» نفس النمط: صلاحية مستقلة opt-in لحساب العضو
     if (name === "returnsReg" && !canManageReturns()) {
       toast("صلاحية «إدارة المرتجعات» غير مفعّلة لحسابك", "error");
+      name = "dashboard";
+    }
+    // 🆕 بناء 115: «الحضور والانصراف» — نفس نمط البوابة
+    if (name === "attendance" && !canManageAttendance()) {
+      toast("صلاحية «الحضور والانصراف» غير مفعّلة لحسابك", "error");
+      name = "dashboard";
+    }
+    // 🆕 بناء 115: «القيود اليومية» لصاحب الشركة والمالك فقط (طلب المالك: مش أي حد يسجل قيود)
+    if (name === "journal" && !canUseView("journal")) {
+      toast("شاشة «القيود اليومية» متاحة لصاحب الشركة والمالك فقط", "error");
       name = "dashboard";
     }
     document.querySelectorAll(".view[data-id]").forEach((v) => {
@@ -1260,10 +1340,11 @@
     if (name === "returnsReg") renderReturns();
     if (name === "treasury") { syncTreasuryFromSett(); recalculateTreasuryBalances(); renderTreasury(); renderTreMoves(); }
     if (name === "accounts") renderAccounts();
-    if (name === "journal") renderJournal();
+    if (name === "journal") { renderJournal(); renderLedger(); } // 🆕 بناء 115: + دفتر الحركة
     if (name === "balance") renderBalance();
     if (name === "treasuryStatements") { recalculateTreasuryBalances(); renderTreStmt(); }
     if (name === "reports") renderReports();
+    if (name === "attendance") renderAttendanceView();
     if (name === "users") renderUsers();
     if (name === "audit") renderAudit();
     if (name === "settings") loadSettingsForm();
@@ -1587,6 +1668,7 @@
   /* ================== نافذة: خيارات العميل ================== */
   let actionsCust = null;
   let statementCtx = null;
+  let stmFilter = { from: "", to: "" }; // 🆕 مهمة 96: فترة كشف الحساب (فاضي = بالكامل)
 
   function openActions(cust) {
     actionsCust = cust;
@@ -1612,14 +1694,17 @@
 
   /* ================== كشف الحساب ================== */
   function getStatement(cust) {
-    // 🔁 بناء 108: مرتجعات «رد نقدية» ملهاش حركة على الحساب — سطر توضيحي ما يغيّرش الرصيد
+    // 🔁 بناء 108: مرتجعات «رد قيمة المرتجع» ملهاش حركة على الحساب — سطر توضيحي ما يغيّرش الرصيد
     const memoRows = saleReturns
       .filter((r) => r.settlement === "refund" && Number(r.customerId) === Number(cust.id))
-      .map((r) => ({
-        date: retDateOf(r),
-        desc: "↩️ مرتجع مبيعات رقم " + retNo(r) + " — رد نقدية بقيمة " + fmt(r.grandTotal) + " ج.م",
-        debit: 0, credit: 0
-      }));
+      .map((r) => {
+        const tr = treasury.find((x) => Number(x.id) === Number(r.treasuryId));
+        return {
+          date: retDateOf(r),
+          desc: "↩️ مرتجع مبيعات رقم " + retNo(r) + " — رد" + (tr ? " من " + tr.name : "") + " بقيمة " + fmt(r.grandTotal) + " ج.م",
+          debit: 0, credit: 0
+        };
+      });
     const rows = txs
       .filter((t) => Number(t.customerId) === Number(cust.id))
       .concat(memoRows)
@@ -1638,10 +1723,64 @@
   }
 
   function fillStatementTable(tbodyEl, cust) {
+    // 🆕 مهمة 96: طباعة صفحة الكشف تحترم فلتر الفترة لو مضبوط
+    renderStmRows(tbodyEl, stmVisibleRows(getStatement(cust)), "لا توجد حركات على حساب هذا العميل في هذه الفترة.");
+  }
+
+  function dateRange() {
+    const from = new Date();
+    from.setDate(from.getDate() - 30);
+    const p = (x) => String(x).padStart(2, "0");
+    return (
+      p(from.getDate()) + "/" + p(from.getMonth() + 1) + "/" + from.getFullYear() +
+      " - " +
+      p(new Date().getDate()) + "/" + p(new Date().getMonth() + 1) + "/" + new Date().getFullYear()
+    );
+  }
+
+  /* ================== 🆕 مهمة 96: فلترة كشف الحساب بالفترة (من/إلى) أو بالكامل ==================
+     الرصيد الجاري في كل سطر محسوب من أول السجل — الفلترة تعرض سطور الفترة فقط،
+     ولو «من» موجودة بنضيف سطر «رصيد مرحّل» برصيد آخر حركة قبل البداية عشان الرقم يفضل مفهوم.
+     ما بيتغيرش أي سلوك لما الفترة فاضية (الافتراضي = عرض بالكامل زي زمان). */
+  function stmPeriodLabel() {
+    const p = (x) => String(x).padStart(2, "0");
+    const ar = (iso) => { const d = new Date(iso); return p(d.getDate()) + "/" + p(d.getMonth() + 1) + "/" + d.getFullYear(); };
+    if (!stmFilter.from && !stmFilter.to) return "بلا فلترة (كامل السجل)";
+    if (stmFilter.from && stmFilter.to) return "من " + ar(stmFilter.from) + " إلى " + ar(stmFilter.to);
+    if (stmFilter.from) return "من " + ar(stmFilter.from) + " وحتى اليوم";
+    return "من أول السجل إلى " + ar(stmFilter.to);
+  }
+
+  function stmVisibleRows(rows) {
+    const from = stmFilter.from, to = stmFilter.to;
+    if (!from && !to) return rows;
+    const out = rows.filter((r) => (!from || r.date >= from) && (!to || r.date <= to));
+    if (from) {
+      const before = rows.filter((r) => r.date < from);
+      if (before.length) {
+        out.unshift({
+          date: from,
+          desc: "▷ رصيد مرحّل من قبل هذه الفترة",
+          debit: 0, credit: 0,
+          balance: before[before.length - 1].balance
+        });
+      }
+    }
+    return out;
+  }
+
+  function stmRowsNow() {
+    if (!statementCtx) return [];
+    const all = statementCtx.type === "supplier"
+      ? getSupplierStatement(statementCtx.obj)
+      : getStatement(statementCtx.obj);
+    return stmVisibleRows(all);
+  }
+
+  function renderStmRows(tbodyEl, rows, emptyMsg) {
     tbodyEl.innerHTML = "";
-    const rows = getStatement(cust);
-    if (rows.length === 0) {
-      tbodyEl.innerHTML = '<tr><td colspan="5">لا توجد حركات على حساب هذا العميل.</td></tr>';
+    if (!rows.length) {
+      tbodyEl.innerHTML = '<tr><td colspan="5">' + emptyMsg + '</td></tr>';
       return;
     }
     rows.forEach((r) => {
@@ -1656,31 +1795,50 @@
     });
   }
 
-  function dateRange() {
-    const from = new Date();
-    from.setDate(from.getDate() - 30);
-    const p = (x) => String(x).padStart(2, "0");
-    return (
-      p(from.getDate()) + "/" + p(from.getMonth() + 1) + "/" + from.getFullYear() +
-      " - " +
-      p(new Date().getDate()) + "/" + p(new Date().getMonth() + 1) + "/" + new Date().getFullYear()
-    );
+  function refreshStatementView() {
+    if (!statementCtx) return;
+    const o = statementCtx.obj;
+    $("#stmHeadMini").innerHTML =
+      "الكود: <b>" + esc(o.code) + "</b> | الفترة: <b>" + stmPeriodLabel() + "</b> | " +
+      "الرصيد الحالي: <b class=\"" + (o.currentBalance > 0 ? "balance-debit" : "balance-credit") + "\">" + fmt(o.currentBalance) + " ج.م</b>";
+    const rows = stmRowsNow();
+    renderStmRows($("#stmBodyMini"), rows, "لا توجد حركات على هذا الحساب في هذه الفترة.");
+    const moves = rows.filter((r) => String(r.desc).indexOf("رصيد مرحّل") === -1).length;
+    $("#stmPeriodInfo").textContent = (!stmFilter.from && !stmFilter.to)
+      ? (moves + " حركة")
+      : (moves + " حركة في الفترة المحددة");
+  }
+
+  function applyStmFilter() {
+    const f = $("#stmFrom").value || "";
+    const t = $("#stmTo").value || "";
+    if (f && t && f > t) {
+      toast("تاريخ البداية «" + f + "» بعد تاريخ النهاية «" + t + "» — صحّح الفترة علشان الفلترة تتظبط.", "warning");
+      return;
+    }
+    stmFilter = { from: f, to: t };
+    refreshStatementView();
+  }
+
+  function resetStmFilter() {
+    stmFilter = { from: "", to: "" };
+    if ($("#stmFrom")) $("#stmFrom").value = "";
+    if ($("#stmTo")) $("#stmTo").value = "";
+    if ($("#stmPeriodInfo")) $("#stmPeriodInfo").textContent = "";
   }
 
   function openStatement(cust) {
     statementCtx = { type: "customer", obj: cust };
+    resetStmFilter(); // 🆕 مهمة 96: كل كشف يفتح بفلتر نظيف (بالكامل)
     $("#stmTitle").textContent = "📋 كشف حساب تفصيلي: " + cust.nameAr;
-    $("#stmHeadMini").innerHTML =
-      "الكود: <b>" + esc(cust.code) + "</b> | الفترة: <b>" + dateRange() + "</b> | " +
-      "الرصيد الحالي: <b class=\"" + (cust.currentBalance > 0 ? "balance-debit" : "balance-credit") + "\">" + fmt(cust.currentBalance) + " ج.م</b>";
-    fillStatementTable($("#stmBodyMini"), cust);
+    refreshStatementView();
     showModal("mStatement");
   }
 
   function printStatement(cust) {
     $("#stmName").textContent = cust.nameAr;
     $("#stmCode").textContent = cust.code;
-    $("#stmRange").textContent = dateRange();
+    $("#stmRange").textContent = stmPeriodLabel(); // 🆕 مهمة 96: الفترة المعروضة = الفلتر الفعلي
     const bal = $("#stmBal");
     bal.textContent = fmt(cust.currentBalance);
     bal.className = cust.currentBalance > 0 ? "balance-debit" : "balance-credit";
@@ -3447,27 +3605,9 @@
 
   function openSupplierStatement(s) {
     statementCtx = { type: "supplier", obj: s };
-    const rows = getSupplierStatement(s);
-    const mini = $("#stmBodyMini");
+    resetStmFilter(); // 🆕 مهمة 96: كل كشف يفتح بفلتر نظيف (بالكامل)
     $("#stmTitle").textContent = "📋 كشف حساب تفصيلي: " + s.nameAr;
-    $("#stmHeadMini").innerHTML =
-      "الكود: <b>" + esc(s.code) + "</b> | الفترة: <b>" + dateRange() + "</b> | " +
-      "الرصيد الحالي: <b class=\"" + (s.currentBalance > 0 ? "balance-debit" : "balance-credit") + "\">" + fmt(s.currentBalance) + " ج.م</b>";
-    mini.innerHTML = "";
-    if (!rows.length) {
-      mini.innerHTML = '<tr><td colspan="5">لا توجد حركات على حساب هذا المورد.</td></tr>';
-    } else {
-      rows.forEach((r) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML =
-          '<td>' + esc(r.date) + '</td>' +
-          '<td style="text-align:right">' + esc(r.desc) + '</td>' +
-          '<td>' + (r.debit ? fmt(r.debit) : "-") + '</td>' +
-          '<td>' + (r.credit ? fmt(r.credit) : "-") + '</td>' +
-          '<td class="' + (r.balance > 0 ? "balance-debit" : "balance-credit") + '">' + fmt(r.balance) + '</td>';
-        mini.appendChild(tr);
-      });
-    }
+    refreshStatementView(); // 🆕 مهمة 96: رندر مشترك بين العميل والمورد مع احترام فلتر الفترة
     showModal("mStatement");
   }
 
@@ -3475,9 +3615,9 @@
     printStatementDoc({
       name: s.nameAr,
       code: s.code,
-      range: dateRange(),
+      range: stmPeriodLabel(), // 🆕 مهمة 96: الفترة على الورقة = الفلتر الفعلي
       balance: s.currentBalance,
-      rows: getSupplierStatement(s)
+      rows: stmVisibleRows(getSupplierStatement(s)) // 🆕 مهمة 96: الطباعة تحترم فلتر الفترة
     });
   }
 
@@ -3797,7 +3937,7 @@
   function retSettleText(r) {
     if (r && r.settlement === "refund") {
       const tr = treasury.find((x) => Number(x.id) === Number(r.treasuryId));
-      return "رد نقدية" + (tr ? " من " + tr.name : "");
+      return tr ? "رد من " + tr.name : "رد قيمة المرتجع";
     }
     return "خصم من الرصيد";
   }
@@ -3975,17 +4115,45 @@
     const wantType = retMethodType();
     const prev = sel.value;
     sel.innerHTML = "";
-    const rows = treasury.filter((t) => !t.type || t.type === wantType);
-    (rows.length ? rows : treasury).forEach((t) => {
-      const opt = document.createElement("option");
-      opt.value = t.id;
-      opt.textContent = t.name + " (" + fmt(t.balance) + " ج.م)";
-      sel.appendChild(opt);
+    // 🆕 تسوية المرتجع: الخزينة والبنوك والمحافظ كلها معروضة ومجمّعة، والطريقة المختارة بتحدد الافتراضي
+    const trById = (v) => treasury.find((t) => String(t.id) === String(v));
+    const trType = (t) => (t && t.type) || "cash";
+    const groups = [["cash", "💵 الخزينة (نقدية)"], ["bank", "🏛️ البنوك"], ["wallet", "📱 المحافظ الإلكترونية"]];
+    groups.forEach(function (g) {
+      const rows = treasury.filter((t) => trType(t) === g[0]);
+      if (!rows.length) return;
+      const og = document.createElement("optgroup");
+      og.label = g[1];
+      rows.forEach((t) => {
+        const opt = document.createElement("option");
+        opt.value = t.id;
+        opt.textContent = t.name + " (" + fmt(t.balance) + " ج.م)";
+        og.appendChild(opt);
+      });
+      sel.appendChild(og);
     });
-    if (prev) {
-      const found = Array.prototype.slice.call(sel.options).some((o) => o.value === prev);
-      if (found) sel.value = prev;
+    if (!sel.options.length) return;
+    // الاختيار: يحترم السابق لو من نوع الطريقة، وإلا أول حساب مطابق، وإلا أول حساب متاح
+    let target = (prev && trById(prev) && trType(trById(prev)) === wantType) ? prev : null;
+    if (!target) {
+      const first = treasury.find((t) => trType(t) === wantType);
+      if (first) target = String(first.id);
     }
+    if (!target && prev && trById(prev)) target = prev;
+    if (!target) target = String(sel.options[0].value);
+    const found = Array.prototype.slice.call(sel.options).some((o) => o.value === target);
+    if (found) sel.value = target;
+  }
+
+  // اختيار الحساب يحدد طريقة الرد تلقائيًا (نقدي/بنكي/محفظة) — فيفضل السند والقيود متسقة
+  function syncRetMethodFromTreasury() {
+    const sel = $("#retTreasury");
+    if (!sel || sel.hidden) return;
+    const t = treasury.find((x) => String(x.id) === String(sel.value));
+    if (!t) return;
+    const typ = t.type || "cash";
+    const m = $("#retMethod");
+    if (m) m.value = typ === "bank" ? "تحويل بنكي 🏛️" : typ === "wallet" ? "محفظة إلكترونية 📱" : "نقداً 💵";
   }
 
   function applyRetSettleUI() {
@@ -3997,11 +4165,12 @@
     $("#retTreasury").hidden = !show;
     const hint = $("#retSettleHint");
     if (hint) {
+      const partyLbl = (retDraft && retDraft.isSales) ? "العميل" : (retDraft ? "المورد" : "الطرف");
       hint.textContent = show
-        ? "هيتم تحريك مبلغ فعلي من الخزينة/الحساب."
+        ? "المبلغ هينزل فعليًا من الحساب اللي هتختاره (خزينة أو بنك أو محفظة)."
         : (retDraft && retDraft.isAjali
-          ? "الفاتورة آجلة — قيمة المرتجع بتتخصم من الرصيد (من غير تحريك فلوس)."
-          : "من غير تحريك فلوس — قيمة المرتجع بتتخصم من الرصيد.");
+          ? "الفاتورة آجلة — قيمة المرتجع بتتخصم من رصيد " + partyLbl + "."
+          : "قيمة المرتجع بتتخصم من رصيد " + partyLbl + " وتظهر في كشف حسابه.");
     }
     if (show) fillRetTreasury();
   }
@@ -4128,7 +4297,7 @@
       ? customers.find((c) => Number(c.id) === partyId)
       : suppliers.find((s) => Number(s.id) === partyId);
     if (settle === "balance" && !party) {
-      toast("ما لقيناش حساب " + (isSales ? "العميل" : "المورد") + " المرتبط بالفاتورة — اختار «رد نقدية» أو سجّل الحساب الأول.", "warning");
+      toast("ما لقيناش حساب " + (isSales ? "العميل" : "المورد") + " المرتبط بالفاتورة — اختار «رد قيمة المرتجع» أو سجّل الحساب الأول.", "warning");
       return;
     }
     let tr = null;
@@ -4252,7 +4421,7 @@
     renderTreMoves();
     renderTable();
     renderSuppliers();
-    toast("تم تسجيل المرتجع رقم (" + no + ") وتحديث المخزون" + (settle === "refund" ? " والخزينة" : " والرصيد") + " — الفاتورة الأصلية فضلت موجودة.", "success");
+    toast("تم تسجيل المرتجع رقم (" + no + ") وتحديث المخزون" + (settle === "refund" ? " وحساب الرد (" + tr.name + ")" : " والرصيد") + " — الفاتورة الأصلية فضلت موجودة.", "success");
   }
 
   /* ---- حذف المرتجع: تراجع كل القيود العكسية ---- */
@@ -4885,6 +5054,430 @@
     renderJournal();
   }
 
+  /* ================== 🆕 بناء 115: تبسيط القيود اليومية ==================
+     أزرار «تسجيل مصروفات / تسجيل إيرادات / تحويل من حساب إلى حساب» يترجمها
+     البرنامج تلقائيًا إلى: سند خزينة (out/in) + قيد يومية بسطرين + تسوية
+     أرصدة دليل الحسابات — بنفس آليات saveVoucher/saveJournal القديمة تمامًا،
+     بدون تعديل أي دالة موجودة. البند = حساب ورقي تحت جذر المصروفات/الإيرادات،
+     فبيتزامن مع كل أجهزة الشركة وبيدخل النسخ الاحتياطي من غير جداول جديدة. */
+
+  let simpleMode = "expense"; // "expense" | "income"
+
+  // البوابة الثانية جوه الدوال نفسها (نمط المرتجعات/الحضور): حصانة حتى لو اتنادت الدالة مباشرة
+  function canUseSimpleJournal() {
+    return isSuperAcct() || isCompanyOwnerAcct();
+  }
+  function simpleGate(msg) {
+    if (canUseSimpleJournal()) return true;
+    toast(msg || "التسجيل في القيود متاح لصاحب الشركة والمالك فقط.", "error");
+    return false;
+  }
+
+  // أوراق المصروفات/الإيرادات (بنود التسجيل المبسط): نوعها expense/revenue، ليست جذرًا ولا أبًا لحساب آخر
+  function leafItemAccounts(type) {
+    return accounts.filter((a) => a.type === type && a.parentId !== 0 && a.isActive &&
+      !accounts.some((x) => Number(x.parentId) === Number(a.id)));
+  }
+
+  // جذر شجرة الإيرادات (4) أو المصروفات (5): حساب النوع بدون أب
+  function itemRootAccount(type) {
+    return accounts.find((a) => a.type === type && Number(a.parentId) === 0) || null;
+  }
+
+  // كود جديد تحت الأب (5 → 5.3 مثلًا): أكبر لاحقة عددية مستخدمة + 1
+  function nextItemCode(parent) {
+    const base = String(parent.code || (parent.type === "revenue" ? "4" : "5"));
+    let n = 1;
+    accounts.forEach((a) => {
+      if (Number(a.parentId) !== Number(parent.id)) return;
+      const c = String(a.code || "");
+      if (c.indexOf(base + ".") !== 0) return;
+      const num = parseInt(c.slice(base.length + 1), 10);
+      if (!isNaN(num) && num >= n) n = num + 1;
+    });
+    return base + "." + n;
+  }
+
+  // خزينة → حساب الدليل المقابل (نقدية 1.1.1 / بنك 1.1.2 / محفظة 1.1.3) مع احتياطي بالاسم ثم بالنقدية
+  function accForTreasuryAcc(t) {
+    const byCode = { cash: "1.1.1", bank: "1.1.2", wallet: "1.1.3" };
+    const byName = { cash: "صناديق", bank: "البنوك", wallet: "المحافظ" };
+    const key = t && byCode[t.type] ? t.type : "cash";
+    let a = accounts.find((x) => String(x.code) === byCode[key] && x.isActive);
+    if (a) return a;
+    a = accounts.find((x) => x.type === "asset" && Number(x.parentId) !== 0 && x.isActive && (x.nameAr || "").includes(byName[key]));
+    if (a) return a;
+    return accounts.find((x) => String(x.code) === "1.1.1" && x.isActive) || null;
+  }
+
+  // قائمة خزائن بملصق الرصيد، والنقدية أولًا (المفضل) ثم البنوك فالمحافظ
+  function fillTreasurySelect(selId) {
+    const el = $(selId);
+    el.innerHTML = "";
+    const ORD = { cash: 0, bank: 1, wallet: 2 };
+    const rank = (t) => (ORD[t.type] !== undefined ? ORD[t.type] : 3);
+    const list = treasury.slice().sort((a, b) => rank(a) - rank(b) || String(a.name || "").localeCompare(String(b.name || ""), "ar"));
+    list.forEach((t) => {
+      const opt = document.createElement("option");
+      opt.value = t.id;
+      const typeLbl = t.type === "bank" ? "بنك" : t.type === "wallet" ? "محفظة" : "نقدية";
+      opt.textContent = t.name + " (" + typeLbl + ") — رصيد " + fmt(t.balance || 0) + " ج.م";
+      el.appendChild(opt);
+    });
+    return list;
+  }
+
+  // datalist حيّ لأي حقل نصي (بنود / حسابات دفتر الحركة)
+  function ensureDatalist(dlId, values) {
+    let dl = document.getElementById(dlId);
+    if (!dl) {
+      dl = document.createElement("datalist");
+      dl.id = dlId;
+      document.body.appendChild(dl);
+    }
+    dl.innerHTML = "";
+    values.forEach((v) => {
+      const opt = document.createElement("option");
+      opt.value = v;
+      dl.appendChild(opt);
+    });
+    return dl;
+  }
+
+  function openSimpleEntry(mode) {
+    if (!simpleGate()) return;
+    simpleMode = mode === "income" ? "income" : "expense";
+    const income = simpleMode === "income";
+    const type = income ? "revenue" : "expense";
+    $("#simpleTitle").textContent = income ? "➕ تسجيل إيرادات" : "➖ تسجيل مصروفات";
+    $("#lblSimpleItem").textContent = income ? "بند الإيراد: *" : "البند المنصرف عليه: *";
+    $("#lblSimpleTreasury").textContent = income ? "قبض في: *" : "دفع من: *";
+    $("#simpleItem").value = "";
+    $("#simpleAmount").value = "";
+    $("#simpleNotes").value = "";
+    $("#simpleDate").value = todayISO();
+    ensureDatalist("simpleItemList", leafItemAccounts(type).map((a) => a.nameAr));
+    $("#simpleItem").setAttribute("list", "simpleItemList");
+    fillTreasurySelect("#simpleTreasury");
+    $("#simpleHint").textContent = income
+      ? "✅ المبلغ هينزل فعليًا في الحساب اللي هتختاره، والبرنامج يسجّل السند والقيد والترحيل تلقائيًا."
+      : "✅ المبلغ هيطلع فعليًا من الحساب اللي هتختاره (المُفضّل النقدية، ويتغير لبنك أو محفظة)، والبرنامج يسجّل السند والقيد والترحيل تلقائيًا.";
+    showModal("mSimpleEntry");
+    $("#simpleItem").focus();
+  }
+
+  // حسم نص البند إلى حساب بنود صحيح من نوعه؛ بند جديد تمامًا ⇒ اقتراح إضافته تلقائيًا
+  function resolveItemAccount(text, type) {
+    const q = String(text || "").trim();
+    if (!q) return null;
+    const leaves = leafItemAccounts(type);
+    let hit = leaves.find((a) => normalizeAr(a.nameAr) === normalizeAr(q)) ||
+      leaves.find((a) => normalizeAr(a.nameAr).includes(normalizeAr(q))) ||
+      leaves.find((a) => normalizeAr(q).includes(normalizeAr(a.nameAr)));
+    return hit || null;
+  }
+
+  function saveSimpleEntry() {
+    if (!simpleGate()) return;
+    const income = simpleMode === "income";
+    const type = income ? "revenue" : "expense";
+    const date = $("#simpleDate").value || todayISO();
+    const amount = Math.round((parseFloat($("#simpleAmount").value) || 0) * 100) / 100;
+    const itemText = $("#simpleItem").value.trim();
+    const tid = parseInt($("#simpleTreasury").value, 10);
+    const t = treasury.find((x) => Number(x.id) === tid);
+    if (!itemText) { toast("اكتب اسم البند أو اختاره من القائمة.", "warning"); return; }
+    if (!(amount > 0)) { toast("اكتب مبلغًا صحيحًا أكبر من الصفر.", "warning"); return; }
+    if (!t) { toast("اختار الحساب: خزينة نقدية أو بنك أو محفظة.", "warning"); return; }
+
+    let itemAcc = resolveItemAccount(itemText, type);
+    if (!itemAcc) {
+      const root = itemRootAccount(type);
+      const lbl = income ? "إيراد" : "مصروف";
+      if (!root) { toast("لا يوجد حساب جذر لـ" + (income ? "الإيرادات" : "المصروفات") + " في دليل الحسابات — أضفه من شاشة الحسابات أولًا.", "error"); return; }
+      if (!confirm("البند «" + itemText + "» مش ضمن بنود الـ" + lbl + " الموجودة.\nإضافه كبند جديد تحت «" + root.nameAr + "»؟")) return;
+      itemAcc = {
+        id: nextAccountId(),
+        code: nextItemCode(root),
+        nameAr: itemText,
+        type: type,
+        parentId: root.id,
+        openingBalance: 0,
+        isActive: true
+      };
+      accounts.push(itemAcc);
+      saveAccounts();
+    }
+
+    const cashAcc = accForTreasuryAcc(t);
+    if (!cashAcc) { toast("لا يوجد حساب خزينة مطابق في دليل الحسابات.", "error"); return; }
+
+    // تحذير الرصيد: واضح بالأرقام، والمالك قرر الحفظ يتم بعد موافقته (يروح بالسالب)
+    if (!income) {
+      const bal = Math.round((Number(t.balance || 0)) * 100) / 100;
+      if (amount > bal) {
+        if (!confirm("تنبيه: رصيد «" + t.name + "» (" + fmt(bal) + " ج.م) أقل من المبلغ (" + fmt(amount) + " ج.م).\nالتسجيل هيخلي الرصيد بالسالب — هل تريد المتابعة؟")) return;
+      }
+    }
+
+    const note = $("#simpleNotes").value.trim();
+    const vDesc = (income ? "إيراد: " : "مصروف: ") + itemAcc.nameAr + (note ? " — " + note : "");
+    vouchers.push({
+      id: vouchers.reduce((m, x) => Math.max(m, x.id), 0) + 1,
+      type: income ? "in" : "out",
+      treasuryId: Number(t.id),
+      date: date,
+      amount: amount,
+      desc: vDesc
+    });
+    saveVouchers();
+    recalculateTreasuryBalances(); // نفس معادلة الأرصدة القديمة: السند اتضاف فبيتحسب تلقائيًا
+
+    const lines = income
+      ? [{ accountId: cashAcc.id, debit: amount, credit: 0 }, { accountId: itemAcc.id, debit: 0, credit: amount }]
+      : [{ accountId: itemAcc.id, debit: amount, credit: 0 }, { accountId: cashAcc.id, debit: 0, credit: amount }];
+    const j = {
+      id: journalEntries.reduce((m, x) => Math.max(m, x.id), 0) + 1,
+      number: "JRN-" + String(journalEntries.length + 1).padStart(4, "0"),
+      date: date,
+      desc: vDesc,
+      ref: income ? "تسجيل إيرادات" : "تسجيل مصروفات",
+      debit: amount,
+      credit: amount,
+      lines: lines
+    };
+    // نفس تسوية saveJournal لأرصدة الدليل: الطرف المدين +، والدائن − (لو الحسابان مختلفان)
+    const dAcc = accounts.find((a) => Number(a.id) === lines[0].accountId);
+    const cAcc = accounts.find((a) => Number(a.id) === lines[lines.length - 1].accountId);
+    if (dAcc) dAcc.openingBalance = Math.round(((dAcc.openingBalance || 0) + amount) * 100) / 100;
+    if (cAcc && Number(cAcc.id) !== Number(dAcc.id)) cAcc.openingBalance = Math.round(((cAcc.openingBalance || 0) - amount) * 100) / 100;
+    journalEntries.push(j);
+    persistJournal();
+    saveAccounts();
+
+    hideModal("mSimpleEntry");
+    addActivity(j.ref, vDesc + " (" + t.name + ")");
+    toast("تم التسجيل (" + j.number + ") وترحيله على حساب «" + t.name + "\".", "success");
+    renderJournal();
+    renderLedger();
+    renderCItems();
+    try { renderTreasury(); renderTreMoves(); } catch (e) { }
+  }
+
+  function openTransferEntry() {
+    if (!simpleGate()) return;
+    $("#trAmount").value = "";
+    $("#trNotes").value = "";
+    $("#trDate").value = todayISO();
+    const list = fillTreasurySelect("#trAccFrom");
+    fillTreasurySelect("#trAccTo");
+    if (list[1]) $("#trAccTo").value = list[1].id;
+    else if (list[0]) $("#trAccTo").value = list[0].id;
+    $("#trHint").textContent = "💡 التحويل بين حسابات الخزينة (نقدية / بنك / محفظة) يُسجَّل كسند صرف وسند قبض بنفس المبلغ مع قيد واحد — فرصيد كل حساب بيتحدّث تلقائيًا.";
+    showModal("mSimpleTransfer");
+    $("#trAmount").focus();
+  }
+
+  function saveTransfer() {
+    if (!simpleGate()) return;
+    const fromId = parseInt($("#trAccFrom").value, 10);
+    const toId = parseInt($("#trAccTo").value, 10);
+    const amount = Math.round((parseFloat($("#trAmount").value) || 0) * 100) / 100;
+    const date = $("#trDate").value || todayISO();
+    const from = treasury.find((x) => Number(x.id) === fromId);
+    const to = treasury.find((x) => Number(x.id) === toId);
+    if (!from || !to) { toast("اختار الحساب المنقول منه والحساب المنقول إليه.", "warning"); return; }
+    if (Number(from.id) === Number(to.id)) { toast("لا يمكن التحويل من الحساب إلى نفس الحساب.", "warning"); return; }
+    if (!(amount > 0)) { toast("اكتب مبلغًا صحيحًا أكبر من الصفر.", "warning"); return; }
+    const bal = Math.round((Number(from.balance || 0)) * 100) / 100;
+    if (amount > bal) {
+      if (!confirm("تنبيه: رصيد «" + from.name + "» (" + fmt(bal) + " ج.م) أقل من مبلغ التحويل (" + fmt(amount) + " ج.م).\nالتنفيذ هيخلي الرصيد بالسالب — هل تريد المتابعة؟")) return;
+    }
+    const note = $("#trNotes").value.trim();
+    const tag = "تحويل من «" + from.name + "» إلى «" + to.name + "»" + (note ? " — " + note : "");
+    const baseId = vouchers.reduce((m, x) => Math.max(m, x.id), 0);
+    // سندان مرتبطان بنفس الوصف: صرف من الأول وقبض في التاني — معادلة recalculateTreasuryBalances بتمشي زي ما هي
+    vouchers.push({ id: baseId + 1, type: "out", treasuryId: Number(from.id), date: date, amount: amount, desc: "سند صرف — " + tag });
+    vouchers.push({ id: baseId + 2, type: "in", treasuryId: Number(to.id), date: date, amount: amount, desc: "سند قبض — " + tag });
+    saveVouchers();
+    recalculateTreasuryBalances();
+
+    let jNumber = "";
+    const aFrom = accForTreasuryAcc(from);
+    const aTo = accForTreasuryAcc(to);
+    if (aFrom && aTo) {
+      const lines = [{ accountId: aTo.id, debit: amount, credit: 0 }, { accountId: aFrom.id, debit: 0, credit: amount }];
+      const j = {
+        id: journalEntries.reduce((m, x) => Math.max(m, x.id), 0) + 1,
+        number: "JRN-" + String(journalEntries.length + 1).padStart(4, "0"),
+        date: date,
+        desc: tag,
+        ref: "تحويل بين الحسابات",
+        debit: amount,
+        credit: amount,
+        lines: lines
+      };
+      const dAcc = accounts.find((a) => Number(a.id) === lines[0].accountId);
+      const cAcc = accounts.find((a) => Number(a.id) === lines[lines.length - 1].accountId);
+      if (dAcc) dAcc.openingBalance = Math.round(((dAcc.openingBalance || 0) + amount) * 100) / 100;
+      if (cAcc && Number(cAcc.id) !== Number(dAcc.id)) cAcc.openingBalance = Math.round(((cAcc.openingBalance || 0) - amount) * 100) / 100;
+      journalEntries.push(j);
+      persistJournal();
+      saveAccounts();
+      jNumber = j.number;
+    }
+    hideModal("mSimpleTransfer");
+    addActivity("تحويل بين الحسابات", tag + " بمبلغ " + fmt(amount) + " ج.م");
+    toast("تم التحويل" + (jNumber ? " (قيد " + jNumber + ")" : "") + " بين «" + from.name + "» و«" + to.name + "\".", "success");
+    renderJournal();
+    renderLedger();
+    try { renderTreasury(); renderTreMoves(); } catch (e) { }
+  }
+
+  /* ---- دفتر حركة الحسابات: كل الحركات اللي تمت جوه أي حساب ---- */
+  function computeLedger() {
+    const el = $("#txtLedgerAcc");
+    const text = el ? String(el.value || "").trim() : "";
+    if (!text) return null;
+    const acc = resolveJournalAccount(text);
+    if (!acc) return null;
+    const rows = [];
+    journalEntries.slice()
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)) || (Number(a.id) - Number(b.id)))
+      .forEach((j) => {
+        (j.lines || []).forEach((l) => {
+          if (Number(l.accountId) === Number(acc.id)) {
+            rows.push({ date: j.date, number: j.number, desc: j.desc, debit: Number(l.debit) || 0, credit: Number(l.credit) || 0 });
+          }
+        });
+      });
+    let net = 0;
+    rows.forEach((r) => { net += r.debit - r.credit; });
+    // النمود القديم بيحدّث openingBalance مع كل قيد (هو الرصيد الجاري فعليًا) —
+    // فالافتتاحي الصحيح = الجاري − محصل كل القيود، وبعدها الجاري من جديد سطر بسطر بلا ازدواج.
+    let run = Math.round((Number(acc.openingBalance || 0) - net) * 100) / 100;
+    const opening = run;
+    rows.forEach((r) => { run = Math.round((run + r.debit - r.credit) * 100) / 100; r.run = run; });
+    return { acc: acc, rows: rows, opening: opening, final: run };
+  }
+
+  function renderLedger() {
+    const tbody = $("#dgvJLedger tbody");
+    if (!tbody) return;
+    const info = $("#ledgerInfo");
+    const text = ($("#txtLedgerAcc").value || "").trim();
+    if (!text) {
+      tbody.innerHTML = '<tr><td colspan="6">اكتب كود أو اسم الحساب لعرض كل الحركات اللي تمت جوه.</td></tr>';
+      if (info) info.textContent = "";
+      return;
+    }
+    const led = computeLedger();
+    if (!led) {
+      tbody.innerHTML = '<tr><td colspan="6">الحساب غير موجود في دليل الحسابات.</td></tr>';
+      if (info) info.textContent = "";
+      return;
+    }
+    tbody.innerHTML = "";
+    if (led.opening) {
+      const tr0 = document.createElement("tr");
+      tr0.innerHTML = '<td>—</td><td>—</td><td style="text-align:right">رصيد افتتاحي</td><td>-</td><td>-</td><td>' + fmt(led.opening) + '</td>';
+      tbody.appendChild(tr0);
+    }
+    led.rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td>' + esc(r.date) + '</td>' +
+        '<td>' + esc(r.number) + '</td>' +
+        '<td style="text-align:right">' + esc(r.desc) + '</td>' +
+        '<td>' + (r.debit ? fmt(r.debit) : "-") + '</td>' +
+        '<td>' + (r.credit ? fmt(r.credit) : "-") + '</td>' +
+        '<td>' + fmt(r.run) + '</td>';
+      tbody.appendChild(tr);
+    });
+    if (!led.rows.length) tbody.innerHTML = '<tr><td colspan="6">لا توجد حركات على هذا الحساب بعد.</td></tr>';
+    if (info) info.textContent = "الحساب: " + led.acc.nameAr + " (" + led.acc.code + ") — الحركات: " + led.rows.length + " — الرصيد النهائي: " + fmt(led.final) + " ج.م";
+  }
+
+  function printLedger() {
+    if (!simpleGate("الاستعلام عن حركة الحسابات متاح لصاحب الشركة والمالك فقط.")) return;
+    const led = computeLedger();
+    if (!led) { toast("اختار حسابًا صحيحًا من دليل الحسابات أولًا.", "warning"); return; }
+    if (!confirm("هل تريد طباعة كشف حساب «" + led.acc.nameAr + "»؟")) return;
+    printStatementDoc({
+      name: "كشف حساب: " + led.acc.nameAr,
+      code: led.acc.code,
+      range: led.rows.length ? led.rows[0].date + " ← " + led.rows[led.rows.length - 1].date : todayISO(),
+      balance: led.final,
+      rows: led.rows.map((r) => ({ date: r.date, desc: r.number + " — " + r.desc, debit: r.debit, credit: r.credit, balance: r.run }))
+    });
+  }
+
+  /* ---- تبويب «بنود المصروفات والإيرادات» في إعدادات مؤسستك (بناء 115) ---- */
+  function renderCItems() {
+    const box = $("#cGridItems");
+    if (!box) return;
+    const usedCount = {};
+    journalEntries.forEach((j) => {
+      (j.lines || []).forEach((l) => {
+        const k = Number(l.accountId);
+        usedCount[k] = (usedCount[k] || 0) + 1;
+      });
+    });
+    box.innerHTML = "";
+    const tbl = document.createElement("table");
+    tbl.className = "dgv";
+    tbl.innerHTML = '<thead><tr><th style="width:12%">الكود</th><th style="width:40%">البند</th><th style="width:14%">النوع</th><th style="width:16%">مستخدم في قيود</th><th style="width:18%">حذف</th></tr></thead>';
+    const tb = document.createElement("tbody");
+    const items = accounts.filter((a) => (a.type === "expense" || a.type === "revenue") && Number(a.parentId) !== 0 &&
+      !accounts.some((x) => Number(x.parentId) === Number(a.id)));
+    items.forEach((a) => {
+      const tr = document.createElement("tr");
+      const n = usedCount[Number(a.id)] || 0;
+      tr.innerHTML = '<td>' + esc(a.code) + '</td><td style="text-align:right">' + esc(a.nameAr) + (a.isActive ? '' : ' 🔴') + '</td><td>' + (a.type === "revenue" ? "إيراد" : "مصروف") + '</td><td>' + (n ? n + " حركة" : "—") + '</td>';
+      const td = document.createElement("td");
+      const btn = document.createElement("button");
+      btn.className = "btn small red"; btn.type = "button"; btn.textContent = "🗑️ حذف";
+      btn.addEventListener("click", () => {
+        if (!simpleGate()) return;
+        const uses = journalEntries.reduce((m, j) => m + ((j.lines || []).some((l) => Number(l.accountId) === Number(a.id)) ? 1 : 0), 0);
+        if (uses) { toast("ممنوع حذف بند مستخدم في القيود («" + a.nameAr + "» عليه " + uses + " قيد).", "error"); return; }
+        if (!confirm("حذف البند «" + a.nameAr + "»؟ لن يؤثر على أي قيد محفوظ.")) return;
+        const idx = accounts.findIndex((x) => Number(x.id) === Number(a.id));
+        if (idx >= 0) accounts.splice(idx, 1);
+        saveAccounts();
+        renderCItems();
+        toast("تم حذف البند «" + a.nameAr + "\".", "success");
+      });
+      td.appendChild(btn);
+      tr.appendChild(td);
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    box.appendChild(tbl);
+    if (!items.length) {
+      const note = document.createElement("p");
+      note.className = "stk-hint";
+      note.textContent = "لا توجد بنود بعد — أضف بندًا من الزرار فوق، أو سجّل مصروفًا/إيرادًا باسم جديد والبرنامج يقترح إضافته.";
+      box.appendChild(note);
+    }
+  }
+
+  function addCItem() {
+    if (!simpleGate()) return;
+    const name = ($("#cItemNewName").value || "").trim();
+    const kind = $("#cItemNewKind").value === "revenue" ? "revenue" : "expense";
+    if (!name) { toast("اكتب اسم البند.", "warning"); return; }
+    const dup = accounts.find((a) => (a.type === "expense" || a.type === "revenue") && Number(a.parentId) !== 0 && normalizeAr(a.nameAr) === normalizeAr(name));
+    if (dup) { toast("البند «" + dup.nameAr + "» (" + (dup.type === "revenue" ? "إيراد" : "مصروف") + ") موجود بالفعل.", "info"); return; }
+    const root = itemRootAccount(kind);
+    if (!root) { toast("لا يوجد حساب جذر لـ" + (kind === "revenue" ? "الإيرادات" : "المصروفات") + " في دليل الحسابات.", "error"); return; }
+    accounts.push({ id: nextAccountId(), code: nextItemCode(root), nameAr: name, type: kind, parentId: root.id, openingBalance: 0, isActive: true });
+    saveAccounts();
+    $("#cItemNewName").value = "";
+    renderCItems();
+    toast("تمت إضافة البند «" + name + "» وهو متاح الآن في التسجيل المبسط.", "success");
+  }
+
   /* ================== قائمة المركز المالي ================== */
   function renderBalance() {
     const d = new Date();
@@ -5495,6 +6088,7 @@
         // 🆕 ترحيل ٣٤: نصلّح الهويات وننقّي التكرار قبل الرسم، عشان العميل يشوف حسابه مرة واحدة
         syncTreasuryFromSett();
         renderAllSettPanes("c");
+        renderCItems(); // 🆕 بناء 115: بنود المصروفات والإيرادات (من دليل الحسابات مش من payload الضبط)
       }).catch((e) => toast("تعذّر تحميل إعدادات مؤسستك: " + (e.message || e), "error"));
       return;
     }
@@ -5503,6 +6097,7 @@
       categories: [], units: [], warehouses: [], owners: [], wallets: [], banks: []
     };
     renderAllSettPanes("c");
+    renderCItems(); // 🆕 بناء 115
   }
 
   function gatherSettPayload(prefix) {
@@ -5847,6 +6442,7 @@
     "db/supabase-upgrade-22-admin-online.sql", "db/supabase-upgrade-23-full-backup.sql"];
   var DEPLOY_DATA_TABLES = ["organizations", "profiles",
     "accounts", "audit_logs", "categories", "customer_txs", "customers",
+    "employees", "attendance", "att_settings",
     "journal_entries", "journal_lines", "mizan_created_accounts", "mizan_invoice_seq",
     "mizan_pw_store", "owners", "password_changes", "presence", "products",
     "purchase_items", "purchases", "sale_items", "sales", "supplier_txs", "suppliers",
@@ -6215,6 +6811,11 @@
     });
     $("#btnCloseStmt").addEventListener("click", () => hideModal("mStatement"));
 
+    // 🆕 مهمة 96: فلترة كشف الحساب بالفترة (من/إلى) أو بالكامل
+    $("#stmFrom").addEventListener("change", applyStmFilter);
+    $("#stmTo").addEventListener("change", applyStmFilter);
+    $("#btnStmAll").addEventListener("click", () => { resetStmFilter(); refreshStatementView(); });
+
     $("#btnAddProduct").addEventListener("click", () => openProductDialog(null));
     $("#btnStockTake").addEventListener("click", openStockTake);
     $("#btnTransferStock").addEventListener("click", openTransferModal);
@@ -6462,6 +7063,7 @@
     });
     $("#retSettle").addEventListener("change", applyRetSettleUI);
     $("#retMethod").addEventListener("change", fillRetTreasury);
+    $("#retTreasury").addEventListener("change", syncRetMethodFromTreasury); // 🆕 اختيار الحساب يضبط الطريقة
     $("#dgvRetItems").addEventListener("input", (e) => {
       if (e.target && e.target.classList.contains("ret-qty-inp")) recalcRetTotal();
     });
@@ -6513,6 +7115,18 @@
     /* ---- القيود اليومية ---- */
     $("#btnAddJournal").addEventListener("click", openJournal);
     $("#txtJournalSearch").addEventListener("input", renderJournal);
+    // 🆕 بناء 115: تبسيط القيود — الأزرار الثلاثة + دفتر الحركة + بنود الضبط
+    $("#btnExpEntry").addEventListener("click", () => openSimpleEntry("expense"));
+    $("#btnIncEntry").addEventListener("click", () => openSimpleEntry("income"));
+    $("#btnTransferEntry").addEventListener("click", openTransferEntry);
+    $("#btnSaveSimple").addEventListener("click", saveSimpleEntry);
+    $("#btnCancelSimple").addEventListener("click", () => hideModal("mSimpleEntry"));
+    $("#btnSaveTransfer").addEventListener("click", saveTransfer);
+    $("#btnCancelJTransfer").addEventListener("click", () => hideModal("mSimpleTransfer"));
+    $("#txtLedgerAcc").addEventListener("input", renderLedger);
+    $("#txtLedgerAcc").addEventListener("focus", () => ensureDatalist("ledgerAccountsList", accounts.filter((a) => Number(a.parentId) !== 0 && a.isActive).map((a) => a.code + " - " + a.nameAr)));
+    $("#btnLedgerPrint").addEventListener("click", printLedger);
+    $("#btnCItemAdd").addEventListener("click", addCItem);
     $("#btnAddJLine").addEventListener("click", () => {
       jrnLines.push({ accountId: "0", accountText: "", debit: "", credit: "" });
       renderJrnLines();
@@ -6938,7 +7552,8 @@ const pwEye = document.getElementById("btnShowPass");
     const S = window.MIZAN_STATE;
     const checks = [
       ["customers", customers], ["suppliers", suppliers], ["products", products],
-      ["treasury", treasury], ["accounts", accounts]
+      ["treasury", treasury], ["accounts", accounts],
+      ["employees", employees], ["attendance", attendance]
     ];
     checks.forEach(([name, arr]) => {
       if (!arr || !arr.length || (S[name] && S[name].length)) return;
@@ -7388,6 +8003,17 @@ const pwEye = document.getElementById("btnShowPass");
     step("purchase_returns", S.purchase_returns, purchaseReturns, function (v) { purchaseReturns = v; });
     step("supplier_txs", S.supplier_txs, supplierTxs, function (v) { supplierTxs = v; });
     step("customer_txs", S.customer_txs, txs, function (v) { txs = v; });
+    // 🆕 بناء 115: دمج الحضور زي بقية الجداول (بالهوية local_id — درس ترحيل ٣٤)
+    step("employees", S.employees, employees, function (v) { employees = v; });
+    step("attendance", S.attendance, attendance, function (v) { attendance = v; });
+    // att_settings: سطر واحد لكل شركة — لو LOCAL كان افتراضي (مفتاحش غايب لحظة الإقلاع)
+    // والسحابة فيها قيمة حقيقية، السحابة هي المرجع. غير كده المحلية تتثبت فوقها لاحقًا بالـ push.
+    try {
+      if (Array.isArray(S.att_settings) && S.att_settings.length &&
+          bootLsPresent[LS_ATT_SETTINGS] === false) {
+        attSettings = Object.assign(defaultAttSettings(), S.att_settings[0]);
+      }
+    } catch (e) { }
     step("vouchers", S.vouchers, vouchers, function (v) { vouchers = v; });
     step("journal_entries", S.journalEntries, journalEntries, function (v) { journalEntries = v; });
     linkInvoiceParties();
@@ -7412,6 +8038,10 @@ const pwEye = document.getElementById("btnShowPass");
     localStorage.setItem(LS_VOUCHERS, JSON.stringify(vouchers));
     localStorage.setItem(LS_SALE_RETURNS, JSON.stringify(saleReturns));
     localStorage.setItem(LS_PURCHASE_RETURNS, JSON.stringify(purchaseReturns));
+    // 🆕 بناء 115
+    localStorage.setItem(LS_EMPLOYEES, JSON.stringify(employees));
+    localStorage.setItem(LS_ATTENDANCE, JSON.stringify(attendance));
+    localStorage.setItem(LS_ATT_SETTINGS, JSON.stringify(attSettings));
   }
 
   /* ================== شاشة "غير متاح" (وقت/قفل/حجب) ================== */
@@ -7465,6 +8095,839 @@ const pwEye = document.getElementById("btnShowPass");
     msgEl.className = "login-msg err";
   }
 
+  /* ================== 🆕 بناء 115: منطق الحضور والانصراف ================== */
+  // الحالات السبع المعتمدة (نفس قيود CHECK في ترحيل ٣٥ — ماتفكش الاتنين عن بعض)
+  const ATT_STATUSES = {
+    present: "حاضر", absent: "غائب", late: "متأخر", mission: "مأمورية",
+    leave: "إجازة", permit: "إذن", holiday: "عطلة رسمية"
+  };
+  let attBound = false;          // أربطة الأحداث تُعمل مرة واحدة عند أول فتح للتبويب
+  let attTab = "today";
+  let editingEmpId = null;       // local id للموظف محل التعديل (null = جديد)
+  let attEditRow = null;         // السجل اللي مفتوح للتعديل اليدوي
+  let attLastRep = null;         // آخر تقرير: {head:[], rows:[[]], title, period, filter}
+
+  /* ---------- أدوات وقت صغيرة ---------- */
+  function attParseHM(str) {                      // "09:30" → 570 دقيقة من منتصف اليوم
+    var m = /^(\d{1,2}):(\d{2})/.exec(str || "");
+    if (!m) return 0;
+    return Number(m[1]) * 60 + Number(m[2]);
+  }
+  function attMinutesOf(iso) {                    // ISO → دقائق محلية من منتصف اليوم
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    return d.getHours() * 60 + d.getMinutes();
+  }
+  function attHM(iso) {                           // ISO → "HH:MM" للعرض (أو —)
+    if (!iso) return "—";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "—";
+    var p = function (x) { return String(x).padStart(2, "0"); };
+    return p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  function attLocalInput(iso) {                   // ISO → قيمة datetime-local
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    var p = function (x) { return String(x).padStart(2, "0"); };
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+      "T" + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  function attHrs(min) {                          // دقائق → "7.50 س"
+    return (Number(min) || 0) === 0 ? "0.00 س" : ((Number(min) || 0) / 60).toFixed(2) + " س";
+  }
+  function attMin(min) { return (Number(min) || 0) + " د"; }
+  function attMonthStart() { return todayISO().slice(0, 8) + "01"; }
+  function attMonthEnd() {
+    var d = new Date(), p = function (x) { return String(x).padStart(2, "0"); };
+    var last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+    return last.getFullYear() + "-" + p(last.getMonth() + 1) + "-" + p(last.getDate());
+  }
+  function attSettingsSafe() {
+    if (!attSettings || !attSettings.workStart || !attSettings.workEnd) attSettings = defaultAttSettings();
+    return attSettings;
+  }
+  function currentAttUser() {
+    try {
+      var p = (window.DATA && DATA.me && DATA.me());
+      if (p && p.full_name) return p.full_name;
+      if (window.DATA && DATA.email && DATA.email()) return DATA.email();
+    } catch (e) { }
+    return "—";
+  }
+  function attEmpById(id) {
+    id = String(id);
+    return employees.filter(function (e) { return String(e.id) === id; })[0] || null;
+  }
+  function attEmpName(id) {
+    var e = attEmpById(id);
+    return e ? (e.nameAr || e.code || ("#" + id)) : ("موظف #" + id);
+  }
+  function attDepartments() {
+    var seen = {};
+    employees.forEach(function (e) { if (e.department) seen[e.department] = 1; });
+    return Object.keys(seen).sort();
+  }
+  function nextEmployeeLocalId() {
+    return employees.reduce(function (m, e) { return Math.max(m, Number(e.id) || 0); }, 0) + 1;
+  }
+  function nextAttLocalId() {
+    return attendance.reduce(function (m, a) { return Math.max(m, Number(a.id) || 0); }, 0) + 1;
+  }
+  function nextEmployeeCode() {
+    var max = 0;
+    employees.forEach(function (e) {
+      var m = /^EMP-(\d+)$/.exec(e.code || "");
+      if (m) max = Math.max(max, +m[1]);
+    });
+    return "EMP-" + String(max + 1).padStart(4, "0");
+  }
+  function findEmployeeByBadge(q) {
+    q = String(q == null ? "" : q).trim();
+    if (!q) return null;
+    var hit = null;
+    employees.forEach(function (e) {
+      if (hit) return;
+      if (String(e.badge || "").trim() === q || String(e.code || "").trim() === q || String(e.id) === q) hit = e;
+    });
+    return hit;
+  }
+  function attBadge(status) {
+    var lbl = ATT_STATUSES[status] || status || "—";
+    return '<span class="att-badge att-' + esc(status || "") + '">' + esc(lbl) + "</span>";
+  }
+  function attIsAttending(a) {
+    return !!(a.checkIn) || a.status === "present" || a.status === "late" || a.status === "mission";
+  }
+
+  /* ---------- حسابات التأخير/الساعات/الإضافي من مدة العمل ---------- */
+  function computeAttTimes(row) {
+    var s = attSettingsSafe();
+    var start = attParseHM(s.workStart), end = attParseHM(s.workEnd);
+    var grace = Math.max(0, Number(s.graceMin) || 0);
+    var lunch = Math.max(0, Number(s.lunchMin) || 0);
+    var res = { lateMin: 0, earlyMin: 0, workMin: 0, otMin: 0 };
+    var inM = row.checkIn ? attMinutesOf(row.checkIn) : null;
+    var outM = row.checkOut ? attMinutesOf(row.checkOut) : null;
+    if (inM != null) res.lateMin = Math.max(0, inM - (start + grace));
+    if (inM != null && outM != null && outM > inM) {
+      res.workMin = Math.max(0, (outM - inM) - lunch);
+      res.earlyMin = Math.max(0, end - outM);
+      var std = Math.max(0, (end - start) - lunch);
+      res.otMin = Math.max(0, res.workMin - std);
+    }
+    return res;
+  }
+  function applyAttCalc(row) {
+    var c = computeAttTimes(row);
+    row.lateMin = c.lateMin; row.earlyMin = c.earlyMin; row.workMin = c.workMin; row.otMin = c.otMin;
+    return row;
+  }
+  function recalcAllAttendance() {
+    attendance.forEach(applyAttCalc);
+    saveAttendance();
+  }
+
+  /* ---------- مصادرة سطر اليوم لموظف ---------- */
+  function attTodayRow(employeeId) {
+    var t = todayISO();
+    return attendance.filter(function (a) {
+      return String(a.employeeId) === String(employeeId) && a.date === t;
+    })[0] || null;
+  }
+
+  /* ---------- تسجيل حضور / انصراف (الوقت من النظام تلقائيًا) ---------- */
+  function resolvePunchEmp() {
+    var badge = $("#txtPunchBadge").value;
+    var e = findEmployeeByBadge(badge);
+    if (!e && String(badge || "").trim()) {
+      toast("معرّف غير موجود: «" + badge + "» — اختر الموظف من القائمة أو صحّح المعرّف", "error");
+      return null;
+    }
+    if (!e) {
+      var selId = $("#selPunchEmp").value;
+      if (!selId) { toast("اختر الموظف أولًا أو امسح معرّفه", "error"); return null; }
+      e = attEmpById(selId);
+      if (!e) { toast("موظف غير موجود", "error"); return null; }
+    }
+    if (e.isActive === false) {
+      toast("«" + (e.nameAr || e.code) + "» متوقف — شغّله من شاشة الموظفين أولًا", "error");
+      return null;
+    }
+    return e;
+  }
+  function punchManualTime(which) {
+    // وقت يدوي قبل التسجيل: مسموح ONLY لصاحب صلاحية التعديل (قاعدة المالك رقم ٢)
+    if (!canEditAttendance()) return null;
+    var el = document.getElementById(which === "in" ? "atManIn" : "atManOut");
+    if (!el || el.disabled || !el.value) return null;
+    var d = new Date(el.value);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  function doPunch(kind) {
+    if (!canManageAttendance()) { toast("صلاحية «الحضور والانصراف» غير مفعّلة لحسابك", "error"); return; }
+    var emp = resolvePunchEmp();
+    if (!emp) return;
+    var row = attTodayRow(emp.id);
+    var manual = punchManualTime(kind);
+    var now = manual || new Date().toISOString();
+    var auto = !manual;
+    if (kind === "in") {
+      if (row && row.checkIn) {
+        toast("⏰ حضور «" + (emp.nameAr || emp.code) + "» مسجّل بالفعل الساعة " + attHM(row.checkIn) +
+          (canEditAttendance() ? " — استخدم ✏️ التعديل اليدوي لو لزم" : ""), "info");
+        return;
+      }
+      if (!row) {
+        row = {
+          id: nextAttLocalId(), employeeId: Number(emp.id), date: todayISO(),
+          checkIn: now, checkOut: null, status: "present",
+          lateMin: 0, earlyMin: 0, workMin: 0, otMin: 0,
+          autoTimed: auto, note: "", userName: currentAttUser()
+        };
+        applyAttCalc(row);
+        if (row.lateMin > 0) row.status = "late";
+        attendance.push(row);
+      } else {
+        row.checkIn = now; row.autoTimed = auto; row.userName = currentAttUser();
+        applyAttCalc(row);
+        if (row.status === "absent") row.status = row.lateMin > 0 ? "late" : "present";
+        else if (row.lateMin > 0 && row.status === "present") row.status = "late";
+      }
+      saveAttendance();
+      addActivity("تسجيل حضور", (emp.nameAr || emp.code) + " — " + attHM(now) + (auto ? " (وقت النظام)" : " (يدوي)"));
+      toast("🟢 تم تسجيل حضور «" + (emp.nameAr || emp.code) + "» الساعة " + attHM(now) +
+        (row.lateMin > 0 ? " — متأخر " + row.lateMin + " دقيقة" : ""), "success");
+    } else {
+      if (!row || !row.checkIn) {
+        toast("لا يوجد حضور مسجّل اليوم لـ«" + (emp.nameAr || emp.code) + "» — سجّل الحضور أولًا", "error");
+        return;
+      }
+      if (row.checkOut) {
+        toast("⏰ انصراف «" + (emp.nameAr || emp.code) + "» مسجّل بالفعل الساعة " + attHM(row.checkOut) +
+          (canEditAttendance() ? " — استخدم ✏️ التعديل اليدوي لو لزم" : ""), "info");
+        return;
+      }
+      var inMs = row.checkIn ? new Date(row.checkIn).getTime() : null;
+      var outMs = new Date(now).getTime();
+      if (inMs != null && outMs < inMs) {
+        toast("وقت الانصراف (" + attHM(now) + ") قبل وقت الحضور (" + attHM(row.checkIn) + ") — صحّح الوقت أولًا", "error");
+        return;
+      }
+      row.checkOut = now; row.autoTimed = auto; row.userName = currentAttUser();
+      applyAttCalc(row);
+      saveAttendance();
+      addActivity("تسجيل انصراف", (emp.nameAr || emp.code) + " — " + attHM(now) + (auto ? " (وقت النظام)" : " (يدوي)"));
+      toast("🔴 تم تسجيل انصراف «" + (emp.nameAr || emp.code) + "» — " + attHrs(row.workMin) +
+        (row.otMin > 0 ? " (إضافي " + attMin(row.otMin) + ")" : "") +
+        (row.earlyMin > 0 ? " — منصرف مبكرًا " + row.earlyMin + " دقيقة" : ""), "success");
+    }
+    $("#txtPunchBadge").value = "";
+    $("#atManIn").value = ""; $("#atManOut").value = "";
+    attRenderPunchToday(); attRenderToday();
+  }
+
+  /* ---------- التبويبات الداخلية ---------- */
+  function attSwitchTab(tab) {
+    attTab = tab;
+    document.querySelectorAll("#attTabs .tab-btn").forEach(function (b) {
+      b.classList.toggle("active", b.dataset.att === tab);
+    });
+    var panes = { today: "attPaneToday", emp: "attPaneEmp", punch: "attPanePunch", ledger: "attPaneLedger", reports: "attPaneReports", set: "attPaneSet" };
+    Object.keys(panes).forEach(function (k) {
+      var el = document.getElementById(panes[k]);
+      if (el) el.hidden = (k !== tab);
+    });
+    if (tab === "today") attRenderToday();
+    if (tab === "emp") attRenderEmployees();
+    if (tab === "punch") { attRenderPunchToday(); $("#txtPunchBadge").focus(); }
+    if (tab === "ledger") attRenderLedger();
+    if (tab === "set") attLoadSetForm();
+  }
+
+  /* ---------- لوحة اليوم ---------- */
+  function attRenderToday() {
+    var t = todayISO();
+    var rows = attendance.filter(function (a) { return a.date === t; });
+    var actives = employees.filter(function (e) { return e.isActive !== false; });
+    var present = 0, late = 0, onSite = 0, attendingIds = {};
+    rows.forEach(function (a) {
+      if (attIsAttending(a)) { present++; attendingIds[String(a.employeeId)] = 1; }
+      if (a.status === "late" || (Number(a.lateMin) || 0) > 0) late++;
+      if (a.checkIn && !a.checkOut) onSite++;
+    });
+    var absent = 0;
+    actives.forEach(function (e) { if (!attendingIds[String(e.id)]) absent++; });
+    $("#attKPresent").textContent = present;
+    $("#attKAbsent").textContent = absent;
+    $("#attKLate").textContent = late;
+    $("#attKOnSite").textContent = onSite;
+    var tb = document.querySelector("#dgvAttToday tbody");
+    var html = "";
+    actives.slice().sort(function (x, y) { return String(x.nameAr || "").localeCompare(String(y.nameAr || ""), "ar"); })
+      .forEach(function (e) {
+        var a = rows.filter(function (r) { return String(r.employeeId) === String(e.id); })[0];
+        html += "<tr><td>" + esc(e.nameAr || e.code) + "</td><td>" + esc(e.department || "—") + "</td>" +
+          "<td>" + (a ? esc(attHM(a.checkIn)) : "—") + "</td>" +
+          "<td>" + (a && a.checkOut ? esc(attHM(a.checkOut)) : (a && a.checkIn ? '<span class="att-now">موجود الآن</span>' : "—")) + "</td>" +
+          "<td>" + (a && a.lateMin > 0 ? '<span class="att-late-n">' + a.lateMin + " د</span>" : "—") + "</td>" +
+          "<td>" + (a ? attBadge(a.status) : '<span class="att-badge att-absent">لم يسجّل</span>') + "</td></tr>";
+      });
+    tb.innerHTML = html || '<tr><td colspan="6">لا يوجد موظفون نشطون — أضف موظفًا من تبويب «👥 الموظفون».</td></tr>';
+  }
+
+  /* ---------- الموظفون ---------- */
+  function attRenderEmployees() {
+    var q = normalizeAr($("#txtEmpSearch").value || "");
+    var list = employees.filter(function (e) {
+      if (!q) return true;
+      return normalizeAr([e.nameAr, e.code, e.jobTitle, e.department, e.badge, e.phone].join(" ")).indexOf(q) >= 0;
+    });
+    list.sort(function (x, y) { return String(x.code || "").localeCompare(String(y.code || ""), "ar"); });
+    var working = list.filter(function (e) { return e.isActive !== false; }).length;
+    $("#empSummary").textContent = list.length + " موظف — يعمل " + working + " — متوقف " + (list.length - working);
+    var tb = document.querySelector("#dgvEmployees tbody");
+    tb.innerHTML = list.map(function (e) {
+      return '<tr><td hidden>' + esc(e.id) + "</td><td>" + esc(e.code) + "</td><td>" + esc(e.nameAr) + "</td><td>" + esc(e.jobTitle || "—") +
+        "</td><td>" + esc(e.department || "—") + "</td><td>" + esc(e.phone || "—") + "</td><td>" + esc(e.hireDate || "—") +
+        "</td><td>" + esc(e.badge || "—") + "</td>" +
+        "<td>" + (e.isActive !== false ? '<span class="att-now">يعمل</span>' : '<span class="att-stopped">متوقف</span>') + "</td>" +
+        '<td><button class="btn gray sm" type="button" data-edit-emp="' + esc(e.id) + '">✏️ تعديل</button></td></tr>';
+    }).join("") || '<tr><td colspan="10">لا يوجد موظفون — اضغط «➕ إضافة موظف».</td></tr>';
+  }
+
+  /* ---------- نافذة الموظف ---------- */
+  function openEmpModal(emp) {
+    if (!canManageAttendance()) { toast("صلاحية «الحضور والانصراف» غير مفعّلة لحسابك", "error"); return; }
+    editingEmpId = emp ? Number(emp.id) : null;
+    $("#mEmpAddEdit").hidden = false;
+    document.getElementById("mEmpAddEditBox").querySelector("h3").textContent = emp ? "✏️ تعديل بيانات موظف" : "➕ إضافة موظف جديد";
+    $("#fEmpCode").value = emp ? (emp.code || "") : nextEmployeeCode();
+    $("#fEmpName").value = emp ? (emp.nameAr || "") : "";
+    $("#fEmpJob").value = emp ? (emp.jobTitle || "") : "";
+    $("#fEmpDept").value = emp ? (emp.department || "") : "";
+    $("#fEmpPhone").value = emp ? (emp.phone || "") : "";
+    $("#fEmpHire").value = emp ? (emp.hireDate || "") : "";
+    $("#fEmpBadge").value = emp ? (emp.badge || "") : "";
+    $("#fEmpActive").value = emp ? (emp.isActive !== false ? "1" : "0") : "1";
+    $("#fEmpNotes").value = emp ? (emp.notes || "") : "";
+    $("#btnEmpDelete").hidden = !emp;
+    $("#btnEmpToggle").hidden = !emp;
+    $("#btnEmpToggle").textContent = emp && emp.isActive === false ? "▶️ تشغيل الموظف" : "⏸ إيقاف الموظف";
+    $("#fEmpName").focus();
+  }
+  function closeEmpModal() { $("#mEmpAddEdit").hidden = true; editingEmpId = null; }
+  function saveEmpFromModal() {
+    if (!canManageAttendance()) { toast("صلاحية «الحضور والانصراف» غير مفعّلة لحسابك", "error"); return; }
+    var name = $("#fEmpName").value.trim(), code = $("#fEmpCode").value.trim();
+    if (!name) { toast("اسم الموظف مطلوب", "error"); return; }
+    if (!code) { code = nextEmployeeCode(); }
+    var dup = employees.filter(function (e) { return String(e.code).trim() === code && String(e.id) !== String(editingEmpId); })[0];
+    if (dup) { toast("كود «" + code + "» مستخدم بالفعل للموظف «" + dup.nameAr + "»", "error"); return; }
+    var badge = $("#fEmpBadge").value.trim();
+    if (badge) {
+      var dupB = employees.filter(function (e) { return String(e.badge || "").trim() === badge && String(e.id) !== String(editingEmpId); })[0];
+      if (dupB) { toast("معرّف الحضور «" + badge + "» مرتبط بالفعل بـ«" + dupB.nameAr + "»", "error"); return; }
+    }
+    var rec = {
+      code: code, nameAr: name, jobTitle: $("#fEmpJob").value.trim(),
+      department: $("#fEmpDept").value.trim(), phone: $("#fEmpPhone").value.trim(),
+      hireDate: $("#fEmpHire").value, badge: badge,
+      isActive: $("#fEmpActive").value !== "0", notes: $("#fEmpNotes").value.trim()
+    };
+    if (editingEmpId != null) {
+      var e = attEmpById(editingEmpId);
+      if (!e) { toast("لم يتم العثور على الموظف", "error"); return; }
+      Object.keys(rec).forEach(function (k) { e[k] = rec[k]; });
+      addActivity("تعديل موظف", name + " (" + code + ")");
+      toast("✔ تم حفظ بيانات «" + name + "»", "success");
+    } else {
+      rec.id = nextEmployeeLocalId();
+      employees.push(rec);
+      addActivity("إضافة موظف", name + " (" + code + ")");
+      toast("✔ تمت إضافة الموظف «" + name + "»", "success");
+    }
+    saveEmployees();
+    closeEmpModal();
+    attFillSelects(); attRenderEmployees(); attRenderToday();
+  }
+  function toggleEmpActive(id) {
+    var e = attEmpById(id);
+    if (!e) return;
+    e.isActive = e.isActive === false;
+    saveEmployees();
+    addActivity(e.isActive ? "تشغيل موظف" : "إيقاف موظف", (e.nameAr || e.code));
+    attFillSelects(); attRenderEmployees(); attRenderToday();
+    toast(e.isActive ? "▶️ تم تشغيل «" + (e.nameAr || e.code) + "»" : "⏸ تم إيقاف «" + (e.nameAr || e.code) + "» — سجلاته محفوظة", "success");
+  }
+  function deleteEmpFromModal() {
+    if (editingEmpId == null) return;
+    var e = attEmpById(editingEmpId);
+    if (!e) return;
+    var hasRows = attendance.some(function (a) { return String(a.employeeId) === String(e.id); });
+    if (hasRows) {
+      toast("لا يمكن حذف «" + (e.nameAr || e.code) + "» لأنه له سجلات حضور — استخدم «⏸ إيقاف» للحفاظ على التاريخ", "error");
+      return;
+    }
+    if (!confirm("هل أنت متأكد من حذف الموظف «" + (e.nameAr || e.code) + "» نهائيًا؟")) return;
+    employees = employees.filter(function (x) { return String(x.id) !== String(e.id); });
+    saveEmployees();
+    addActivity("حذف موظف", (e.nameAr || e.code) + " (" + e.code + ")");
+    toast("🗑 تم حذف الموظف «" + (e.nameAr || e.code) + "»", "success");
+    closeEmpModal();
+    attFillSelects(); attRenderEmployees(); attRenderToday();
+  }
+
+  /* ---------- تبويب التسجيل ---------- */
+  function attRenderPunchToday() {
+    var t = todayISO();
+    var rows = attendance.filter(function (a) { return a.date === t; });
+    rows.sort(function (x, y) { return String(attEmpName(x.employeeId)).localeCompare(String(attEmpName(y.employeeId)), "ar"); });
+    var canEdit = canEditAttendance();
+    var tb = document.querySelector("#dgvPunchToday tbody");
+    tb.innerHTML = rows.map(function (a) {
+      var act;
+      if (!a.checkOut) act = '<button class="btn red sm" type="button" data-punch-out="' + esc(a.employeeId) + '">🔴 انصراف</button> ';
+      else act = "";
+      if (canEdit) act += '<button class="btn gray sm" type="button" data-edit-att="' + esc(a.id) + '">✏️ تعديل</button>';
+      return "<tr><td>" + esc(attEmpName(a.employeeId)) + "</td><td>" + esc(attHM(a.checkIn)) + "</td><td>" + esc(attHM(a.checkOut)) + "</td>" +
+        "<td>" + (a.lateMin > 0 ? '<span class="att-late-n">' + a.lateMin + " د</span>" : "—") + "</td>" +
+        "<td>" + esc(attHrs(a.workMin)) + "</td><td>" + attBadge(a.status) + "</td><td>" + act + "</td></tr>";
+    }).join("") || '<tr><td colspan="7">لم تُسجَّل أي عمليات اليوم.</td></tr>';
+    // حقل الوقت اليدوي يظهر فقط لصاحب صلاحية التعديل
+    var man = canEdit && $("#atManIn") && !$("#atManIn").disabled;
+    if (!man) {
+      $("#atManIn").disabled = !canEdit; $("#atManOut").disabled = !canEdit;
+      $("#atManHint").textContent = canEdit
+        ? "اختر موظفًا ثم (اختياري) اكتب وقتًا يدويًا قبل الضغط على التسجيل"
+        : "التسجيل تلقائي من وقت النظام — التعديل اليدوي يحتاج صلاحية «تعديل سجلات الحضور»";
+    }
+  }
+
+  /* ---------- سجل الحضور ---------- */
+  function attLedgerRows() {
+    var empId = $("#selLedEmp").value, dept = $("#selLedDept").value;
+    var from = $("#dtpLedFrom").value, to = $("#dtpLedTo").value;
+    var st = $("#selLedStatus").value;
+    var q = normalizeAr($("#txtLedSearch").value || "");
+    var list = attendance.filter(function (a) {
+      var e = attEmpById(a.employeeId);
+      if (empId && String(a.employeeId) !== empId) return false;
+      if (dept && (!e || (e.department || "") !== dept)) return false;
+      if (from && a.date < from) return false;
+      if (to && a.date > to) return false;
+      if (st && a.status !== st) return false;
+      if (q) {
+        var hay = normalizeAr((e ? [e.nameAr, e.code, e.department].join(" ") : "") + " " +
+          a.date + " " + (ATT_STATUSES[a.status] || a.status) + " " + (a.note || ""));
+        if (hay.indexOf(q) < 0) return false;
+      }
+      return true;
+    });
+    list.sort(function (x, y) {
+      if (x.date !== y.date) return x.date < y.date ? 1 : -1;
+      return String(attEmpName(x.employeeId)).localeCompare(String(attEmpName(y.employeeId)), "ar");
+    });
+    return list;
+  }
+  function attRenderLedger() {
+    var list = attLedgerRows();
+    var canEdit = canEditAttendance();
+    $("#ledSummary").textContent = list.length + " سجل — " +
+      list.filter(function (a) { return a.status === "absent"; }).length + " غياب، " +
+      list.filter(function (a) { return (Number(a.lateMin) || 0) > 0; }).length + " تأخير";
+    var tb = document.querySelector("#dgvLedger tbody");
+    tb.innerHTML = list.map(function (a) {
+      var e = attEmpById(a.employeeId);
+      return '<tr><td hidden>' + esc(a.id) + "</td><td>" + esc(attEmpName(a.employeeId)) + "</td><td>" + esc(e ? (e.department || "—") : "—") + "</td>" +
+        "<td>" + esc(a.date) + "</td><td>" + esc(attHM(a.checkIn)) + "</td><td>" + esc(attHM(a.checkOut)) + "</td>" +
+        "<td>" + (a.lateMin > 0 ? '<span class="att-late-n">' + a.lateMin + " د</span>" : "—") + "</td>" +
+        "<td>" + esc(attHrs(a.workMin)) + "</td>" +
+        "<td>" + (a.otMin > 0 ? '<span class="att-ot">' + esc(attMin(a.otMin)) + "</span>" : "—") + "</td>" +
+        "<td>" + attBadge(a.status) + "</td>" +
+        "<td>" + (canEdit ? '<button class="btn gray sm" type="button" data-edit-att="' + esc(a.id) + '">✏️</button>' : "—") + "</td></tr>";
+    }).join("") || '<tr><td colspan="11">لا توجد سجلات مطابقة للفلاتر الحالية.</td></tr>';
+  }
+  function exportLedgerCsv() {
+    var list = attLedgerRows();
+    var rows = [["التاريخ", "الموظف", "القسم", "الحضور", "الانصراف", "التأخير (د)", "ساعات العمل", "الإضافي (د)", "الحالة", "ملاحظة"]];
+    list.forEach(function (a) {
+      var e = attEmpById(a.employeeId);
+      rows.push([a.date, attEmpName(a.employeeId), e ? (e.department || "") : "", attHM(a.checkIn), attHM(a.checkOut),
+      a.lateMin || 0, (Number(a.workMin) || 0) / 60 === 0 ? "0.00" : ((a.workMin) / 60).toFixed(2),
+      a.otMin || 0, ATT_STATUSES[a.status] || a.status, a.note || ""]);
+    });
+    downloadCSV("سجل-الحضور-" + todayISO() + ".csv", rows);
+    toast("📥 تم تصدير " + list.length + " سجلًا إلى Excel (CSV)", "success");
+  }
+  function printLedger() {
+    var list = attLedgerRows();
+    attFillPrintPage(
+      ["التاريخ", "الموظف", "القسم", "الحضور", "الانصراف", "التأخير", "ساعات العمل", "الإضافي", "الحالة"],
+      list.map(function (a) {
+        var e = attEmpById(a.employeeId);
+        return [a.date, attEmpName(a.employeeId), e ? (e.department || "—") : "—", attHM(a.checkIn), attHM(a.checkOut),
+        a.lateMin > 0 ? a.lateMin + " د" : "—", attHrs(a.workMin), a.otMin > 0 ? attMin(a.otMin) : "—",
+        ATT_STATUSES[a.status] || a.status];
+      }),
+      "📋 سجل الحضور",
+      ($("#dtpLedFrom").value || "البداية") + " إلى " + ($("#dtpLedTo").value || todayISO()),
+      "فلترة: " +
+      ($("#selLedEmp").value ? "موظف=" + attEmpName($("#selLedEmp").value) + " " : "") +
+      ($("#selLedDept").value ? "قسم=" + $("#selLedDept").value + " " : "") +
+      ($("#selLedStatus").value ? "حالة=" + (ATT_STATUSES[$("#selLedStatus").value] || "") : "")
+    );
+  }
+
+  /* ---------- صفحة الطباعة ---------- */
+  function attFillPrintPage(head, rows, title, period, filter) {
+    document.getElementById("arpOrgName").textContent = invOrgName();
+    document.getElementById("arpTitle").textContent = title;
+    document.getElementById("arpPeriod").textContent = period || "—";
+    document.getElementById("arpFilter").textContent = filter || "";
+    document.getElementById("arpHead").innerHTML = head.map(function (h) { return "<th>" + esc(h) + "</th>"; }).join("");
+    document.getElementById("arpBody").innerHTML = rows.map(function (r) {
+      return "<tr>" + r.map(function (c) { return "<td>" + esc(c) + "</td>"; }).join("") + "</tr>";
+    }).join("") || '<tr><td colspan="' + head.length + '">لا توجد بيانات للتقرير.</td></tr>';
+    document.getElementById("arpFoot").innerHTML = "عدد السطور: <b>" + rows.length +
+      "</b> — تاريخ الطباعة: " + todayISO();
+    printSection(document.getElementById("attReportPage"));
+  }
+
+  /* ---------- التقارير ---------- */
+  function attReportHead(type) {
+    if (type === "hours") return ["الموظف", "القسم", "أيام الحضور", "إجمالي ساعات العمل", "متوسط الساعات اليومية"];
+    if (type === "ot") return ["الموظف", "القسم", "أيام فيها إضافي", "إجمالي الإضافي (دقائق)", "إجمالي الإضافي (ساعات)"];
+    if (type === "monthly") return ["الموظف", "القسم", "أيام حضور", "أيام غياب", "إجمالي التأخير (د)", "إجمالي الانصراف المبكر (د)", "إجمالي ساعات العمل", "إجمالي الإضافي (س)"];
+    return ["التاريخ", "الموظف", "القسم", "الحضور", "الانصراف", "التأخير", "الانصراف المبكر", "ساعات العمل", "الإضافي", "الحالة", "ملاحظة"];
+  }
+  function attDetailRow(a) {
+    var e = attEmpById(a.employeeId);
+    return [a.date, attEmpName(a.employeeId), e ? (e.department || "—") : "—", attHM(a.checkIn), attHM(a.checkOut),
+    a.lateMin > 0 ? a.lateMin + " د" : "—", a.earlyMin > 0 ? a.earlyMin + " د" : "—",
+    attHrs(a.workMin), a.otMin > 0 ? attMin(a.otMin) : "—", ATT_STATUSES[a.status] || a.status, a.note || ""];
+  }
+  function attInRange(from, to, empId, dept) {
+    return attendance.filter(function (a) {
+      if (from && a.date < from) return false;
+      if (to && a.date > to) return false;
+      var e = attEmpById(a.employeeId);
+      if (empId && String(a.employeeId) !== empId) return false;
+      if (dept && (!e || (e.department || "") !== dept)) return false;
+      return true;
+    });
+  }
+  function attAggByEmp(list) {
+    var by = {};
+    list.forEach(function (a) {
+      var k = String(a.employeeId);
+      if (!by[k]) by[k] = { present: 0, absent: 0, lateMin: 0, earlyMin: 0, workMin: 0, otMin: 0, otDays: 0 };
+      var g = by[k];
+      if (attIsAttending(a)) g.present++;
+      if (a.status === "absent") g.absent++;
+      g.lateMin += Number(a.lateMin) || 0;
+      g.earlyMin += Number(a.earlyMin) || 0;
+      g.workMin += Number(a.workMin) || 0;
+      g.otMin += Number(a.otMin) || 0;
+      if ((Number(a.otMin) || 0) > 0) g.otDays++;
+    });
+    return by;
+  }
+  function attRunReport() {
+    var type = $("#selAttRepType").value;
+    var from = $("#dtpAttRepFrom").value, to = $("#dtpAttRepTo").value;
+    var empId = $("#selAttRepEmp").value, dept = $("#selAttRepDept").value;
+    if (!from || !to) { toast("حدد الفترة (من / إلى) أولًا", "error"); return; }
+    if (from > to) { toast("تاريخ «من» أكبر من «إلى»", "error"); return; }
+    if (type === "emp" && !empId) { toast("اختر الموظف أولًا لتقرير موظف خلال فترة", "error"); return; }
+    var list = attInRange(from, to, empId, dept);
+    var head = attReportHead(type), rows = [], summary = "", title = "";
+    if (type === "emp") {
+      title = "تقرير حضور: " + attEmpName(empId);
+      rows = list.map(attDetailRow);
+      summary = rows.length + " يومًا مسجلًا";
+    } else if (type === "all") {
+      title = "تقرير حضور جميع الموظفين";
+      rows = list.map(attDetailRow);
+      summary = rows.length + " سجل";
+    } else if (type === "absent") {
+      title = "تقرير الغياب";
+      rows = list.filter(function (a) { return a.status === "absent"; }).map(attDetailRow);
+      summary = rows.length + " يوم غياب";
+    } else if (type === "late") {
+      title = "تقرير التأخير";
+      rows = list.filter(function (a) { return (Number(a.lateMin) || 0) > 0 || a.status === "late"; }).map(attDetailRow);
+      summary = rows.length + " حالة تأخير — " +
+        rows.reduce(function (s, r) { return s + (parseInt(r[5], 10) || 0); }, 0) + " دقيقة إجمالًا";
+    } else if (type === "early") {
+      title = "تقرير الانصراف المبكر";
+      rows = list.filter(function (a) { return (Number(a.earlyMin) || 0) > 0; }).map(attDetailRow);
+      summary = rows.length + " حالة انصراف مبكر";
+    } else if (type === "hours") {
+      title = "تقرير ساعات العمل";
+      var byH = attAggByEmp(list);
+      rows = Object.keys(byH).map(function (k) {
+        var e = attEmpById(k), g = byH[k];
+        return [attEmpName(k), e ? (e.department || "—") : "—", g.present, attHrs(g.workMin),
+        g.present ? attHrs(Math.round(g.workMin / g.present)) : "—"];
+      });
+      summary = rows.length + " موظف";
+    } else if (type === "ot") {
+      title = "تقرير العمل الإضافي";
+      var byO = attAggByEmp(list.filter(function (a) { return (Number(a.otMin) || 0) > 0; }));
+      rows = Object.keys(byO).map(function (k) {
+        var e = attEmpById(k), g = byO[k];
+        return [attEmpName(k), e ? (e.department || "—") : "—", g.otDays, g.otMin, ((g.otMin) / 60).toFixed(2)];
+      });
+      summary = rows.length + " موظف لديهم إضافي — " +
+        rows.reduce(function (s, r) { return s + (Number(r[3]) || 0); }, 0) + " دقيقة إجمالًا";
+    } else if (type === "monthly") {
+      title = "التقرير الشهري لكل موظف (للمرتبات)";
+      var byM = attAggByEmp(list);
+      rows = Object.keys(byM).map(function (k) {
+        var e = attEmpById(k), g = byM[k];
+        return [attEmpName(k), e ? (e.department || "—") : "—", g.present, g.absent, g.lateMin,
+        g.earlyMin, attHrs(g.workMin), ((g.otMin) / 60).toFixed(2)];
+      });
+      rows.sort(function (x, y) { return String(x[0]).localeCompare(String(y[0]), "ar"); });
+      summary = rows.length + " موظف — الفترة: " + from + " إلى " + to;
+    }
+    if (dept) title += " — قسم: " + dept;
+    attLastRep = { head: head, rows: rows, title: title, period: from + " → " + to, summary: summary };
+    $("#attRepTitle").textContent = "📈 " + title;
+    $("#attRepSummary").textContent = summary + " (" + rows.length + " سطر)";
+    document.getElementById("attRepHead").innerHTML = head.map(function (h) { return "<th>" + esc(h) + "</th>"; }).join("");
+    document.querySelector("#dgvAttReport tbody").innerHTML = rows.map(function (r) {
+      return "<tr>" + r.map(function (c, i) {
+        if (i === head.length - 1 && type !== "emp") return "<td>" + esc(c) + "</td>";
+        return "<td>" + esc(c) + "</td>";
+      }).join("") + "</tr>";
+    }).join("") || '<tr><td colspan="' + head.length + '">لا توجد بيانات في هذه الفترة/الفلاتر.</td></tr>';
+  }
+  function attExportRepCsv() {
+    if (!attLastRep) { toast("اعرض التقرير أولًا ثم صدّره", "error"); return; }
+    downloadCSV(attLastRep.title.replace(/[^\u0600-\u06FF0-9 ]+/g, "").trim().replace(/ /g, "-") + "-" + todayISO() + ".csv",
+      [attLastRep.head].concat(attLastRep.rows));
+    toast("📥 تم تصدير التقرير إلى Excel (CSV)", "success");
+  }
+  function attPrintRep() {
+    if (!attLastRep) { toast("اعرض التقرير أولًا ثم اطبعه", "error"); return; }
+    attFillPrintPage(attLastRep.head, attLastRep.rows, "📈 " + attLastRep.title,
+      attLastRep.period, "نوع: " + $("#selAttRepType").selectedOptions[0].textContent +
+      ($("#selAttRepEmp").value ? " — موظف: " + attEmpName($("#selAttRepEmp").value) : "") +
+      ($("#selAttRepDept").value ? " — قسم: " + $("#selAttRepDept").value : ""));
+  }
+
+  /* ---------- مدة العمل ---------- */
+  function attLoadSetForm() {
+    var s = attSettingsSafe();
+    $("#atWorkStart").value = s.workStart;
+    $("#atWorkEnd").value = s.workEnd;
+    $("#atGrace").value = s.graceMin;
+    $("#atLunch").value = s.lunchMin;
+    attUpdateFormula();
+  }
+  function attUpdateFormula() {
+    var s = attSettingsSafe();
+    var std = Math.max(0, attParseHM(s.workEnd) - attParseHM(s.workStart) - (Number(s.lunchMin) || 0));
+    $("#attSetFormula").textContent =
+      "اليوم الرسمي = " + (std / 60).toFixed(2) + " س | التأخير بعد " + s.workStart + " + " + s.graceMin + " د سماح";
+  }
+  function attSaveSetForm() {
+    if (!canManageAttendance()) { toast("صلاحية «الحضور والانصراف» غير مفعّلة لحسابك", "error"); return; }
+    var ws = $("#atWorkStart").value, we = $("#atWorkEnd").value;
+    var gr = Math.max(0, Math.round(Number($("#atGrace").value) || 0));
+    var lc = Math.max(0, Math.round(Number($("#atLunch").value) || 0));
+    if (!ws || !we) { toast("حدد بداية العمل ونهايته أولًا", "error"); return; }
+    if (attParseHM(we) <= attParseHM(ws)) { toast("نهاية العمل يجب أن تكون بعد بداية العمل", "error"); return; }
+    attSettings = { id: (attSettings && attSettings.id) || 1, workStart: ws, workEnd: we, graceMin: gr, lunchMin: lc };
+    saveAttSettings();
+    recalcAllAttendance();     // كل السجلات تعاد حساباتها بالمدة الجديدة
+    attUpdateFormula();
+    addActivity("مدة العمل", ws + " → " + we + " | سماح " + gr + " د | فاصل " + lc + " د");
+    toast("✔ تم حفظ مدة العمل وإعادة حساب جميع السجلات", "success");
+    if (attTab === "today" || attTab === "ledger") attRenderToday();
+  }
+
+  /* ---------- التعديل اليدوي المسجَّل (mizan_att_edit) ---------- */
+  function openAttEdit(attId) {
+    if (!canEditAttendance()) { toast("التعديل اليدوي يحتاج صلاحية «✏️ تعديل سجلات الحضور يدويًا»", "error"); return; }
+    var a = attendance.filter(function (x) { return String(x.id) === String(attId); })[0];
+    if (!a) { toast("سجل غير موجود", "error"); return; }
+    attEditRow = a;
+    $("#mAttEdit").hidden = false;
+    $("#aeEmp").value = attEmpName(a.employeeId);
+    $("#aeDate").value = a.date;
+    $("#aeIn").value = attLocalInput(a.checkIn);
+    $("#aeOut").value = attLocalInput(a.checkOut);
+    $("#aeStatus").innerHTML = Object.keys(ATT_STATUSES).map(function (k) {
+      return '<option value="' + k + '"' + (k === a.status ? " selected" : "") + ">" + ATT_STATUSES[k] + "</option>";
+    }).join("");
+    $("#aeNote").value = a.note || "";
+    $("#aeReason").value = "";
+    $("#aeIn").focus();
+  }
+  function closeAttEdit() { $("#mAttEdit").hidden = true; attEditRow = null; }
+  function saveAttEdit() {
+    if (!attEditRow) return;
+    if (!canEditAttendance()) { toast("لا تملك صلاحية التعديل اليدوي", "error"); return; }
+    var reason = $("#aeReason").value.trim();
+    if (!reason) { toast("سبب التعديل مطلوب — يُحفظ مع القديم والجديد في سجل العمليات", "error"); return; }
+    var inVal = $("#aeIn").value ? new Date($("#aeIn").value) : null;
+    var outVal = $("#aeOut").value ? new Date($("#aeOut").value) : null;
+    if (inVal && isNaN(inVal.getTime())) { toast("وقت الحضور غير صحيح", "error"); return; }
+    if (outVal && isNaN(outVal.getTime())) { toast("وقت الانصراف غير صحيح", "error"); return; }
+    if (inVal && outVal && outVal < inVal) { toast("الانصراف لا يصح أن يسبق الحضور", "error"); return; }
+    if (!(window.DATA && DATA.isOnline && DATA.isOnline() && DATA.client && DATA.client())) {
+      toast("التعديل اليدوي يُنفَّذ على السحابة ويسجل في سجل العمليات — يحتاج اتصالًا بالإنترنت. التسجيل اليومي التلقائي لا يتأثر.", "info");
+      return;
+    }
+    var a = attEditRow;
+    var draft = {
+      checkIn: inVal ? inVal.toISOString() : a.checkIn,
+      checkOut: outVal ? outVal.toISOString() : a.checkOut
+    };
+    var calc = computeAttTimes(draft);
+    var status = $("#aeStatus").value;
+    var note = $("#aeNote").value.trim();
+    var btn = $("#btnAttEditSave");
+    btn.disabled = true;
+    DATA.client().rpc("mizan_att_edit", {
+      p_id: (window.CLOUD && CLOUD.detUuid) ? CLOUD.detUuid("attendance", a.id) : null,
+      p_check_in: draft.checkIn || null,
+      p_check_out: draft.checkOut || null,
+      p_status: status,
+      p_note: note || null,
+      p_late_min: calc.lateMin,
+      p_early_min: calc.earlyMin,
+      p_work_min: calc.workMin,
+      p_ot_min: calc.otMin,
+      p_reason: reason
+    }).then(function (r) {
+      btn.disabled = false;
+      if (r && r.error) {
+        var msg = String(r.error.message || "");
+        if (/permit|غير مصرح/i.test(msg)) toast("لا تملك صلاحية التعديل على السحابة — راجع صاحب الشركة", "error");
+        else if (/غير موجود/i.test(msg)) toast("هذا السجل لم يصل للسحابة بعد — انتظر المزامنة ثم أعد المحاولة", "error");
+        else toast("تعذّر الحفظ: " + (msg || "حاول مرة أخرى"), "error");
+        return;
+      }
+      // نجح على السحابة → الحديث المحلي يطابقها
+      a.checkIn = draft.checkIn; a.checkOut = draft.checkOut;
+      a.status = status; a.note = note;
+      a.lateMin = calc.lateMin; a.earlyMin = calc.earlyMin; a.workMin = calc.workMin; a.otMin = calc.otMin;
+      a.autoTimed = false; a.userName = currentAttUser();
+      saveAttendance();
+      addActivity("تعديل سجل حضور", attEmpName(a.employeeId) + " " + a.date + " — السبب: " + reason);
+      closeAttEdit();
+      attRenderLedger(); attRenderToday(); attRenderPunchToday();
+      toast("✔ تم الحفظ — والسجل دُوُّن في سجل العمليات (القديم والجديد والسبب)", "success");
+    }).catch(function (err) {
+      btn.disabled = false;
+      toast("تعذّر الوصول للسحابة: " + ((err && err.message) || "تحقق من الاتصال"), "error");
+    });
+  }
+
+  /* ---------- تعبئة القوائم ---------- */
+  function attFillSelects() {
+    var emps = employees.slice().sort(function (x, y) { return String(x.nameAr || "").localeCompare(String(y.nameAr || ""), "ar"); });
+    [["selPunchEmp", false], ["selLedEmp", true], ["selAttRepEmp", true]].forEach(function (pair) {
+      var el = document.getElementById(pair[0]);
+      if (!el) return;
+      var cur = el.value;
+      el.innerHTML = (pair[1] ? '<option value="">الكل</option>' : '<option value="">— اختر —</option>') +
+        emps.map(function (e) {
+          return '<option value="' + esc(e.id) + '">' + esc((e.nameAr || e.code) + (e.isActive === false ? " (متوقف)" : "")) + "</option>";
+        }).join("");
+      el.value = cur;
+      if (el.value !== cur) el.value = pair[1] ? "" : "";
+    });
+    var depts = attDepartments();
+    [["selLedDept"], ["selAttRepDept"]].forEach(function (pair) {
+      var el = document.getElementById(pair[0]);
+      if (!el) return;
+      var cur = el.value;
+      el.innerHTML = '<option value="">الكل</option>' + depts.map(function (d) {
+        return '<option value="' + esc(d) + '">' + esc(d) + "</option>";
+      }).join("");
+      el.value = cur;
+    });
+    var dl = document.getElementById("attDeptList");
+    if (dl) dl.innerHTML = depts.map(function (d) { return '<option value="' + esc(d) + '"></option>'; }).join("");
+    var ls = document.getElementById("selLedStatus");
+    if (ls) {
+      var curS = ls.value;
+      ls.innerHTML = '<option value="">كل الحالات</option>' + Object.keys(ATT_STATUSES).map(function (k) {
+        return '<option value="' + k + '">' + ATT_STATUSES[k] + "</option>";
+      }).join("");
+      ls.value = curS;
+    }
+  }
+
+  /* ---------- الربط والأول ---------- */
+  function attBindOnce() {
+    if (attBound) return;
+    attBound = true;
+    $("#attTabs").addEventListener("click", function (ev) {
+      var b = ev.target.closest("[data-att]");
+      if (b) attSwitchTab(b.dataset.att);
+    });
+    $("#btnAddEmp").addEventListener("click", function () { openEmpModal(null); });
+    $("#btnGoPunch").addEventListener("click", function () { attSwitchTab("punch"); });
+    $("#txtEmpSearch").addEventListener("input", attRenderEmployees);
+    $("#btnEmpCancel").addEventListener("click", closeEmpModal);
+    $("#btnEmpSave").addEventListener("click", saveEmpFromModal);
+    $("#btnEmpDelete").addEventListener("click", deleteEmpFromModal);
+    $("#btnEmpToggle").addEventListener("click", function () {
+      if (editingEmpId != null) toggleEmpActive(editingEmpId);
+    });
+    $("#btnPunchIn").addEventListener("click", function () { doPunch("in"); });
+    $("#btnPunchOut").addEventListener("click", function () { doPunch("out"); });
+    $("#txtPunchBadge").addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") { ev.preventDefault(); doPunch("in"); }   // سكنر الباركود يضغط Enter بعد المسح
+    });
+    // جدول الموظفيون + جداول السجل: تفويض أزرار التعديل
+    document.getElementById("viewAttendance").addEventListener("click", function (ev) {
+      var b = ev.target.closest("[data-edit-emp]");
+      if (b) { openEmpModal(attEmpById(b.dataset.editEmp)); return; }
+      b = ev.target.closest("[data-edit-att]");
+      if (b) { openAttEdit(b.dataset.editAtt); return; }
+      b = ev.target.closest("[data-punch-out]");
+      if (b) {
+        var emp = attEmpById(b.dataset.punchOut);
+        if (emp) { $("#selPunchEmp").value = String(emp.id); $("#txtPunchBadge").value = ""; doPunch("out"); }
+      }
+    });
+    ["selLedEmp", "selLedDept", "dtpLedFrom", "dtpLedTo", "selLedStatus"].forEach(function (id) {
+      document.getElementById(id).addEventListener("change", attRenderLedger);
+    });
+    $("#txtLedSearch").addEventListener("input", attRenderLedger);
+    $("#btnLedCsv").addEventListener("click", exportLedgerCsv);
+    $("#btnLedPrint").addEventListener("click", printLedger);
+    $("#btnRunAttRep").addEventListener("click", attRunReport);
+    $("#btnAttRepCsv").addEventListener("click", attExportRepCsv);
+    $("#btnAttRepPrint").addEventListener("click", attPrintRep);
+    $("#btnSaveAttSet").addEventListener("click", attSaveSetForm);
+    $("#btnAttEditCancel").addEventListener("click", closeAttEdit);
+    $("#btnAttEditSave").addEventListener("click", saveAttEdit);
+  }
+
+  function renderAttendanceView() {
+    attSettingsSafe();
+    attBindOnce();
+    attFillSelects();
+    // تواريخ افتراضية مريحة: السجل والتقارير من أول الشهر إلى اليوم (والشهري لآخر الشهر)
+    if (!$("#dtpLedFrom").value) $("#dtpLedFrom").value = attMonthStart();
+    if (!$("#dtpLedTo").value) $("#dtpLedTo").value = todayISO();
+    if (!$("#dtpAttRepFrom").value) $("#dtpAttRepFrom").value = attMonthStart();
+    if (!$("#dtpAttRepTo").value) $("#dtpAttRepTo").value = attMonthEnd();
+    var canEdit = canEditAttendance();
+    $("#atManIn").disabled = !canEdit;
+    $("#atManOut").disabled = !canEdit;
+    attSwitchTab(attTab);
+    attRenderToday();
+  }
+
   /* ================== لوحة إدارة المالك ================== */
   const ADMIN_FEATURES = [
     ["sales", "المبيعات (POS)"], ["purchases", "المشتريات"], ["returns", "الاستعلام عن الفواتير"],
@@ -7476,11 +8939,13 @@ const pwEye = document.getElementById("btnShowPass");
         ["catTab", "تبويب التصنيفات"], ["unitTab", "تبويب وحدات القياس"], ["whTab", "تبويب المستودعات"],
         ["walletTab", "تبويب المحافظ الإلكترونية"], ["bankTab", "تبويب حسابات البنوك"], ["ownerTab", "تبويب أصحاب المنشأة"],
         ["docManager", "📁 إدارة مستندات العملاء والموردين"],
-        ["returnsManager", "🔁 إدارة المرتجعات"]
+        ["returnsManager", "🔁 إدارة المرتجعات"],
+        ["attendance", "🕐 الحضور والانصراف"],
+        ["attendanceEdit", "✏️ تعديل سجلات الحضور يدويًا"]
         ];
 
-  // صلاحيات opt-in: owner/سوبر أدمن عندها دائمًا، والعضو ما عندهاش إلا لو فُعّلت صريحًا
-  const OPT_IN_FEATS = ["clientSettings", "docManager", "returnsManager"];
+  // صلاحيات opt-in: owner/سوبر أدمن عندهما دائمًا، والعضو ما عندهاش إلا لو فُعّلت صريحًا
+  const OPT_IN_FEATS = ["clientSettings", "docManager", "returnsManager", "attendance", "attendanceEdit"];
 
   function fmtDate(d) { return d ? String(d).slice(0, 10) : ""; }
   // تاريخ وساعة محليان (لآخر الاتصال وغيرها) — بصيغة YYYY-MM-DD HH:MM
