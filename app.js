@@ -240,10 +240,15 @@
     customers: ["code", "nameAr", "phone", "openingBalance"],
     suppliers: ["code", "nameAr", "phone", "openingBalance"],
     products: ["code", "barcode", "nameAr", "purchasePrice", "salePrice"],
-    txs: ["customerId", "date", "desc", "debit", "credit"]
+    txs: ["customerId", "date", "desc", "debit", "credit"],
+    // 🛡 بناء 122: مستخدم admin وسجل النشاط التجريبيين لهما توقيع كمان — عشان
+    // «شركة حقيقية = فاضية ١٠٠٪» تغطي كل المحتوى التجريبي مش أربع جداول بس.
+    users: ["username", "fullName", "password", "role", "branch"],
+    activity: ["user", "action", "desc"]
   };
   const SEED_ROWS = {
-    customers: seedCustomers, suppliers: seedSuppliers, products: seedProducts, txs: seedTxs
+    customers: seedCustomers, suppliers: seedSuppliers, products: seedProducts, txs: seedTxs,
+    users: seedUsers, activity: seedActivity
   };
   function isSystemCashRow(row) {
     if (!row) return false;
@@ -271,19 +276,24 @@
   }
   // يشيل الأسطر التجريبية من الذاكرة والكاش (بلا أي رفع للسحابة) — يرجع عدد المحذوف
   function purgeDemoForCloudSession() {
-    const pairs = [["customers", "customers"], ["suppliers", "suppliers"], ["products", "products"], ["txs", "txs"]];
-    const before = { customers: customers, suppliers: suppliers, products: products, txs: txs };
-    customers = stripSeedRows("customers", customers);
-    suppliers = stripSeedRows("suppliers", suppliers);
-    products = stripSeedRows("products", products);
-    txs = stripSeedRows("txs", txs);
-    const keys = { customers: LS_CUSTOMERS, suppliers: LS_SUPPLIERS, products: LS_PRODUCTS, txs: LS_TXS };
+    // 🛡 بناء 122: النطاق بقى كامل — جداول المحتوى الأربعة + مستخدم admin التجريبي
+    // وسجل النشاط التجريبي. الكيانات المحمية (العميل/المورد النقدي) ما تتشالش.
+    const names = ["customers", "suppliers", "products", "txs", "users", "activity"];
+    const keys = { customers: LS_CUSTOMERS, suppliers: LS_SUPPLIERS, products: LS_PRODUCTS,
+      txs: LS_TXS, users: LS_USERS, activity: LS_ACTIVITY };
+    const get = { customers: () => customers, suppliers: () => suppliers, products: () => products,
+      txs: () => txs, users: () => users, activity: () => activity };
+    const set = { customers: (v) => { customers = v; }, suppliers: (v) => { suppliers = v; },
+      products: (v) => { products = v; }, txs: (v) => { txs = v; },
+      users: (v) => { users = v; }, activity: (v) => { activity = v; } };
     let removed = 0;
     A.cleaning = true;   // منع أي رفع أثناء التنظيف (pushTable بيرجع أول حاجة)
     try {
-      pairs.forEach(([name]) => {
-        const arr = name === "customers" ? customers : name === "suppliers" ? suppliers : name === "products" ? products : txs;
-        removed += Math.max(0, before[name].length - arr.length);
+      names.forEach((name) => {
+        const cur = get[name]() || [];
+        const arr = stripSeedRows(name, cur);
+        removed += Math.max(0, cur.length - arr.length);
+        set[name](arr);
         try { localStorage.setItem(keys[name], JSON.stringify(arr)); } catch (e) { }
       });
       mirror();
@@ -294,6 +304,30 @@
   // مين كتب الحالة المحلية في المتصفح ده؟ (null = مجهولة/تجريبية)
   function localStateOrg() { try { return localStorage.getItem(LS_STATE_ORG); } catch (e) { return null; } }
   function stampStateOrg(org) { try { localStorage.setItem(LS_STATE_ORG, org || ""); } catch (e) { } }
+
+  /* ============ 🛡 بناء 122: قاعدة المالك — شركة حقيقية = فاضية ١٠٠٪ ============ */
+  // قرار المالك (02/10): «اعمل القاعده ان اى شركه تنشا فيما بعد تكون فاضية 100%
+  // لكن متحذفش بيانات موجوده». المحتوى التجريبي (أحمد محمد / شركة النور / مصطفى
+  // عبد الله / جهينة / مؤسسة الخير / PRD-00x / حركة 2026-08 / سجل admin / مستخدم
+  // admin) يبقى **للعرض المحلي بدون حساب فقط**. أي متصفح فيه دليل على شركة سحابية
+  // حقيقية يبدأ من الأساس النظامي وحده: العميل والمورد النقدي المحميّان + صندوق
+  // برصيد صفر + شجرة الحسابات، وكل جداول المحتوى فاضية.
+  function realCloudCompanyEvidence() {
+    if (A.online) return true;
+    if (localStateOrg()) return true;                                  // ختم ملكية الحالة (بناء 119)
+    try { if (localStorage.getItem(LS_SRC_ORG)) return true; } catch (e) { }
+    try { if (localStorage.getItem("mizan_session_v1")) return true; } catch (e) { } // جلسة محفوظة
+    try { if (window.DATA && DATA.org && DATA.org()) return true; } catch (e) { }
+    try { if (window.DATA && DATA.email && DATA.email()) return true; } catch (e) { }
+    return false;
+  }
+  // العرض التجريبي مسموح به بس في المتصفح اللي مافيش فيه أي أثر لحساب سحابي
+  function demoAllowedHere() { return !realCloudCompanyEvidence(); }
+  // الأساس النظامي لوحده (الكيانات المحمية بدون أي سطر تجريبي) — نسخة مستقلة
+  // عشان التعديل بعدها على المصفوفة ما يغيّش قالب الـ seed نفسه.
+  function systemOnlyRows(rows) {
+    try { return JSON.parse(JSON.stringify((rows || []).filter(isSystemCashRow))); } catch (e) { return []; }
+  }
 
   // 🛡 بناء 119: الصفر الحقيقي لشركة جديدة — نمسح كل الجداول من الذاكرة والكاش
   // (بلا أي رفع للسحابة: A.cleaning بيطفّئ pushTable) قبل سحب بيانات الشركة.
@@ -635,9 +669,13 @@
           // القديمة ما ترجّعش رصيدًا عدّله المستخدم فعلًا (شكوى: الرصيد الافتتاحي
           // صفر → يرجع 50,000). كمان اللقطة لازم تكون لنفس الشركة.
           if (A.online) return;
-          const nowOrg = (DATA && DATA.org && DATA.org() ? DATA.org().id : null);
-          if (data.orgId && nowOrg && String(data.orgId) !== String(nowOrg)) {
-            console.log("mizan: لقطة الديسك لشركة تانية — تتجاهل (بناء 119)");
+          const nowOrg = (DATA && DATA.org && DATA.org() ? DATA.org().id : null) || localStateOrg();
+          // 🛡 بناء 122: شركة حقيقية ما تقبلش لقطة ديسك مش مختومة بيها — اللقطة اللي
+          // ملهاش ختم (كتابة قديمة قبل بناء 119، أو لقطة وضع العرض المحلي) أصلًا مش
+          // ملك حد، فلازم ما تدخلش جداول شركة سحابية (كان بيكفي «لو فيها orgId»).
+          // وضع العرض المحلي البحت (nowOrg فاضي) لسه بيرجّع لقطة الديسك كما هي.
+          if (nowOrg && String(data.orgId || "") !== String(nowOrg)) {
+            console.log("mizan: لقطة الديسك مش مختومة بشركة هذا المتصفح — تتجاهل (بناء 122)");
             return;
           }
           // 🛡 الاسترجاع من ملف الديسك (مخزن مستقل عن المتصفح/الـ origin):
@@ -646,8 +684,22 @@
           // وبعد الاسترجاع نُثبّت في localStorage حتى لا تُفقد عند إعادة الفتح
           // على نفس الـ origin. (pushTable داخل دوال الحفظ no-op في الوضع المحلي.)
           let restored = false;
+          // 🛡 بناء 122: جدول المحتوى → مفتاح الـ localStorage (لإسقاط أي سطر تجريبي
+          // من لقطة الديسك قبل ما يدخل ذاكرة شركة حقيقية — لقطة قديمة من وضع العرض
+          // المحلي كانت ممكن ترجّع «جهينة/مؤسسة الخير» لشركة سحابية والنت فاصل).
+          const SEED_TABLE_BY_KEY = {};
+          Object.keys(SEED_ROWS).forEach((t) => {
+            if (t === "customers") SEED_TABLE_BY_KEY[LS_CUSTOMERS] = t;
+            if (t === "suppliers") SEED_TABLE_BY_KEY[LS_SUPPLIERS] = t;
+            if (t === "products") SEED_TABLE_BY_KEY[LS_PRODUCTS] = t;
+            if (t === "txs") SEED_TABLE_BY_KEY[LS_TXS] = t;
+          });
           const take = (diskArr, key, inMem, seedRef, assign, persist) => {
             if (!Array.isArray(diskArr) || !diskArr.length) return;
+            // 🛡 شركة حقيقية؟ أي سطر مطابق للتجريبى يتشال من اللقطة قبل الاسترجاع
+            const seedTable = key ? SEED_TABLE_BY_KEY[key] : null;
+            if (seedTable && realCloudCompanyEvidence()) diskArr = stripSeedRows(seedTable, diskArr);
+            if (!diskArr.length) return;
             // لو المفتاح كان غايب لحظة الإقلاع → البيانات الحالية seed (مش شغل
             // مستخدم حقيقي) → يُفضَّل استرجاع الديسك. ده أصلب من مقارنة المرجع
             // لأن ensureCashEntities/الحفظ قد يعيد بناء المصفوفة فيفقد التطابق.
@@ -890,19 +942,22 @@
   }
 
   function loadData() {
+    // 🛡 بناء 122: المحتوى التجريبي للعرض المحلي بدون حساب فقط — في متصفح فيه أثر
+    // لشركة سحابية حقيقية تبدأ الجداول من الأساس النظامي (فاضية عدا الكيانات المحمية).
+    const demo = demoAllowedHere();
     try {
-      customers = JSON.parse(localStorage.getItem(LS_CUSTOMERS)) || seedCustomers;
-      txs = JSON.parse(localStorage.getItem(LS_TXS)) || seedTxs;
+      customers = JSON.parse(localStorage.getItem(LS_CUSTOMERS)) || (demo ? seedCustomers : systemOnlyRows(seedCustomers));
+      txs = JSON.parse(localStorage.getItem(LS_TXS)) || (demo ? seedTxs : []);
       products = (JSON.parse(localStorage.getItem(LS_PRODUCTS)) || []).map(normalizeProduct);
-      activity = JSON.parse(localStorage.getItem(LS_ACTIVITY)) || seedActivity;
+      activity = JSON.parse(localStorage.getItem(LS_ACTIVITY)) || (demo ? seedActivity : []);
       sales = JSON.parse(localStorage.getItem(LS_SALES)) || [];
       treasury = JSON.parse(localStorage.getItem(LS_TREASURY)) || seedTreasury;
-      suppliers = JSON.parse(localStorage.getItem(LS_SUPPLIERS)) || seedSuppliers;
+      suppliers = JSON.parse(localStorage.getItem(LS_SUPPLIERS)) || (demo ? seedSuppliers : systemOnlyRows(seedSuppliers));
       supplierTxs = JSON.parse(localStorage.getItem(LS_SUP_TXS)) || seedSupplierTxs;
       purchases = JSON.parse(localStorage.getItem(LS_PURCHASES)) || seedPurchases;
       accounts = JSON.parse(localStorage.getItem(LS_ACCOUNTS)) || seedAccounts;
       journalEntries = JSON.parse(localStorage.getItem(LS_JOURNAL)) || seedJournal;
-      users = JSON.parse(localStorage.getItem(LS_USERS)) || seedUsers;
+      users = JSON.parse(localStorage.getItem(LS_USERS)) || (demo ? seedUsers : []);
       vouchers = JSON.parse(localStorage.getItem(LS_VOUCHERS)) || seedVouchers;
       saleReturns = JSON.parse(localStorage.getItem(LS_SALE_RETURNS)) || [];
       purchaseReturns = JSON.parse(localStorage.getItem(LS_PURCHASE_RETURNS)) || [];
@@ -919,18 +974,18 @@
         TAX.rate = r > 1 ? r / 100 : r;
       }
     } catch (e) {
-      customers = seedCustomers;
-      txs = seedTxs;
-      products = seedProducts.map(normalizeProduct);
-      activity = seedActivity;
+      customers = demo ? seedCustomers : systemOnlyRows(seedCustomers);
+      txs = demo ? seedTxs : [];
+      products = [];
+      activity = demo ? seedActivity : [];
       sales = [];
       treasury = seedTreasury;
-      suppliers = seedSuppliers;
+      suppliers = demo ? seedSuppliers : systemOnlyRows(seedSuppliers);
       supplierTxs = seedSupplierTxs;
       purchases = seedPurchases;
       accounts = seedAccounts;
       journalEntries = seedJournal;
-      users = seedUsers;
+      users = demo ? seedUsers : [];
       vouchers = seedVouchers;
       saleReturns = [];
       purchaseReturns = [];
@@ -940,26 +995,34 @@
       fixedAssets = [];
       settings = Object.assign({}, defaultSettings);
     }
-    if (!localStorage.getItem(LS_CUSTOMERS)) saveCustomers();
-    if (!localStorage.getItem(LS_TXS)) saveTxs();
-    if (!localStorage.getItem(LS_PRODUCTS)) saveProducts();
-    if (!localStorage.getItem(LS_ACTIVITY)) saveActivity();
-    if (!localStorage.getItem(LS_SALES)) saveSales();
-    if (!localStorage.getItem(LS_TREASURY)) saveTreasury();
-    if (!localStorage.getItem(LS_SUPPLIERS)) saveSuppliers();
-    if (!localStorage.getItem(LS_SUP_TXS)) saveSupplierTxs();
-    if (!localStorage.getItem(LS_PURCHASES)) savePurchases();
-    if (!localStorage.getItem(LS_ACCOUNTS)) saveAccounts();
-    if (!localStorage.getItem(LS_JOURNAL)) persistJournal();
-    if (!localStorage.getItem(LS_USERS)) saveUsers();
-    if (!localStorage.getItem(LS_VOUCHERS)) saveVouchers();
-    if (!localStorage.getItem(LS_SALE_RETURNS)) saveSaleReturns();
-    if (!localStorage.getItem(LS_PURCHASE_RETURNS)) savePurchaseReturns();
-    if (!localStorage.getItem(LS_EMPLOYEES)) saveEmployees();
-    if (!localStorage.getItem(LS_ATTENDANCE)) saveAttendance();
-    if (!localStorage.getItem(LS_ATT_SETTINGS)) saveAttSettings();
-    if (!localStorage.getItem(LS_FIXED_ASSETS)) saveFixedAssets();
-    if (!localStorage.getItem(LS_SETTINGS)) saveSettings();
+    // 🛡 بناء 122: ذيل «أثبّت الفاضي على القرص» ما يقعّش الإقلاع. في متصفح بيرفض
+    // لمس localStorage (وضع خاص قديم / iframe محجوب الكوكيز) كان بيطير Exception من
+    // هنا وتفضل الشاشة بيضاء. البيانات في الذاكرة تكون اتبنيت فعلًا فوق، فالمزامنة
+    // السحابية والحفظ العادي بيكملوا شغلهم — والفشل هنا محلي بحت ومش صامت (console).
+    try {
+      if (!localStorage.getItem(LS_CUSTOMERS)) saveCustomers();
+      if (!localStorage.getItem(LS_TXS)) saveTxs();
+      if (!localStorage.getItem(LS_PRODUCTS)) saveProducts();
+      if (!localStorage.getItem(LS_ACTIVITY)) saveActivity();
+      if (!localStorage.getItem(LS_SALES)) saveSales();
+      if (!localStorage.getItem(LS_TREASURY)) saveTreasury();
+      if (!localStorage.getItem(LS_SUPPLIERS)) saveSuppliers();
+      if (!localStorage.getItem(LS_SUP_TXS)) saveSupplierTxs();
+      if (!localStorage.getItem(LS_PURCHASES)) savePurchases();
+      if (!localStorage.getItem(LS_ACCOUNTS)) saveAccounts();
+      if (!localStorage.getItem(LS_JOURNAL)) persistJournal();
+      if (!localStorage.getItem(LS_USERS)) saveUsers();
+      if (!localStorage.getItem(LS_VOUCHERS)) saveVouchers();
+      if (!localStorage.getItem(LS_SALE_RETURNS)) saveSaleReturns();
+      if (!localStorage.getItem(LS_PURCHASE_RETURNS)) savePurchaseReturns();
+      if (!localStorage.getItem(LS_EMPLOYEES)) saveEmployees();
+      if (!localStorage.getItem(LS_ATTENDANCE)) saveAttendance();
+      if (!localStorage.getItem(LS_ATT_SETTINGS)) saveAttSettings();
+      if (!localStorage.getItem(LS_FIXED_ASSETS)) saveFixedAssets();
+      if (!localStorage.getItem(LS_SETTINGS)) saveSettings();
+    } catch (e) {
+      console.warn("mizan: المتصفح رفض تثبيت الحالة على القرص — البرنامج شغال في الذاكرة", e && e.message);
+    }
   }
 
   function saveProducts() {
@@ -1103,6 +1166,75 @@
   // نص مبلغ نضيف للحانات اللي المستخدم بيكتب فيها (بلا فواصل — عشان fmt+parseFloat كانا باگ)
   function moneyStr(n) {
     return String(Math.round((Number(n) || 0) * 100) / 100);
+  }
+
+  /* ================== 🆕 بناء 123: قاعدة «الإيراد أخضر والمصروف أحمر» ==================
+   * طلب المالك: «عايز قاعدة في البرنامج: أي إيراد المبلغ يكون لونه أخضر وأي مصروف
+   * المبلغ يكون لونه أحمر». وقراره 02/10: القاعدة دي على **الشاشات المالية بس** —
+   * فواتير العميل/المورد وطباعةاتهم ما بتلمسهاش — ورق العميل يفضل زي ما هو.
+   *
+   * القاعدة كلها في مصدر واحد (moneyDirOf) عشان أي شاشة تسمّي الإيراد/المصروف بنفس
+   * المعنى، ومفيش أي دالة تانية تكرّر التسمية:
+   *   • سند / حركة خزينة:  type|kind = "in" / "out"
+   *   • حساب من الدليل:    type = "revenue" / "expense"  أو كود شجرة 4 / 5
+   *   • قيد يومية:         من أسطره (jrnDir) — واللي فيه الإيراد والمصروف بنفس الحجم
+   *                        ما يتلونش: مافيش لون على تخمين.
+   *   • نص عربي/إنجليزي:   "إيراد" / "مصروف" / "in" / "out" */
+  function moneyDirOf(sig) {
+    if (!sig) return "";
+    if (typeof sig === "string") {
+      const t = String(sig).trim().toLowerCase();
+      if (t === "in" || t === "income" || t === "revenue" || t === "إيراد" || t === "مقبوضات") return "in";
+      if (t === "out" || t === "expense" || t === "مصروف" || t === "مدفوعات") return "out";
+      return "";
+    }
+    const ty = String(sig.type || "").trim().toLowerCase();
+    if (ty === "in" || ty === "income" || ty === "revenue") return "in";
+    if (ty === "out" || ty === "expense") return "out";
+    const kd = String(sig.kind || "").trim().toLowerCase();
+    if (kd === "in") return "in";
+    if (kd === "out") return "out";
+    const code = String(sig.code || "").trim();
+    if (code === "4" || code.indexOf("4.") === 0) return "in";
+    if (code === "5" || code.indexOf("5.") === 0) return "out";
+    return "";
+  }
+  // اسم الكلاس اللي يلوّن الخلية (فاضي = ما تلونش — الشاشات التانية زي ما هي)
+  function amtCls(sig) {
+    const d = moneyDirOf(sig);
+    return d === "in" ? "amt-in" : d === "out" ? "amt-out" : "";
+  }
+  // خلية مبلغ في جدول: نفس fmt بالضبط، و«-» وقت الصفر لو الطلب (زي ما الشاشات كانت تعرض)
+  // الصفر ما يتلونش: مافيش حركة اتقالت، فالاتجاه مجهول مش «إيراد» ولا «مصروف».
+  function amtTd(val, sig, zeroDash) {
+    const n = Number(val) || 0;
+    const zero = Math.abs(n) < 0.005;
+    const c = zero ? "" : amtCls(sig);
+    const txt = (zero && zeroDash) ? "-" : fmt(n);
+    return "<td" + (c ? ' class="' + c + '"' : "") + ">" + txt + "</td>";
+  }
+  // تلوين خانة إدخال أو كارت (بـ classList — ما بيشيلش الكلاسات القديمة ولا بيكسر الستايل)
+  function paintDir(sel, sig) {
+    const el = typeof sel === "string" ? $(sel) : sel;
+    if (!el || !el.classList) return;
+    el.classList.remove("amt-in", "amt-out");
+    const c = amtCls(sig);
+    if (c) el.classList.add(c);
+  }
+  // اتجاه القيد من أسطره: كل سطر على شجرة الإيرادات بيزوّد كفة، وكل سطر على المصروفات بيزوّد كفة
+  function jrnDir(j) {
+    let inSum = 0, outSum = 0;
+    ((j && j.lines) || []).forEach((l) => {
+      const a = accounts.find((x) => Number(x.id) === Number(l && l.accountId));
+      const d = moneyDirOf(a);
+      const amt = (Number(l && l.debit) || 0) + (Number(l && l.credit) || 0);
+      if (!d || amt <= 0) return;
+      if (d === "in") inSum += amt; else outSum += amt;
+    });
+    if (inSum > 0 && outSum === 0) return "in";
+    if (outSum > 0 && inSum === 0) return "out";
+    if (Math.abs(inSum - outSum) >= 0.005) return inSum > outSum ? "in" : "out";
+    return "";
   }
 
   function normalizeAr(s) {
@@ -1397,7 +1529,21 @@
   }
   function isSuperAcct() {
     var r = currentAcct();
-    return !!(r && r.is_superadmin);
+    if (r && r.is_superadmin) return true;
+    // 🛡 بناء 121 (طلب المالك: لوحة الإدارة «متختفيش ابدا من عندي»):
+    // لحظة الدخول ممكن مصدر واحد (mizan_access) يوصل ناقص العمود، فالمالك يتعرّف
+    // من أي مصدر **سحابي** تاني بنفس العلم — والمصادر دي كلها جاية من القاعدة
+    // (access / profile / me)، مش من أي إدخال أو localStorage بتاع المستخدم.
+    var DE = window.DATA || {};
+    try {
+      var a = DE.accessInfo ? DE.accessInfo() : null;
+      if (a && a.is_superadmin) return true;
+      var p = DE.getProfile ? DE.getProfile() : null;
+      if (p && p.is_superadmin) return true;
+      var me = DE.me ? DE.me() : null;
+      if (me && me.is_superadmin) return true;
+    } catch (e) { }
+    return false;
   }
 
   // 🔓 قرار المالك النهائي (build 119): حساب عادل = المالك — كل الصلاحيات دائمًا،
@@ -1457,6 +1603,10 @@
     if (name === "journal") return isSuperAcct() || isCompanyOwnerAcct();
     // 🆕 شاشة «كشف حساب الحسابات» (من القيود اليومية) — نفس بوابة القيود بالظبط
     if (name === "accStatement") return isSuperAcct() || isCompanyOwnerAcct();
+    // 🛡 بناء 121 (طلب المالك: لوحة الإدارة «متظهرش عند حد تاني ابدا»):
+    // لوحة الإدارة = لحساب المالك (سوبر أدمن) **حصريًا** — لا قائمة مزايا الشركة
+    // ولا دور «مدير» ولا تفعيل صريح يقدر يفتحها لغيره. (المالك وصلها فوق بـ ownerHasAllAccess)
+    if (name === "admin") return isSuperAcct();
     return DE.featureEnabled ? DE.featureEnabled(name) : true;
   }
 
@@ -1489,6 +1639,15 @@
   // (bkPane / viewSettings) بتكون hidden بالتصميم وقت ما تبويب تاني نشيط —
   // دول بنرجعهم بس لو اتفصلوا، أو لو تبويبهم نفسه هو النشيط.
   const OWNER_TAB_NODES = [];
+  // 🛡 بناء 121: عقد «لوحة الإدارة» اللي مفروض **تفضل ظاهرة** للمالك وهو واقف على اللوحة
+  // (شريط الأزرار + صناديق المحتوى). اللوحات اللي بتتفتح بالزرار — adminSubs / adminDetail /
+  // adminAccounts / adminPwBox — **مش** في القائمة دي عمدًا: الإخفاء بتاعها مشروّع لحد ما
+  // المالك يضغط زرارها، فالحارس ما يعاندش فتح/قفل اللوحات.
+  const ADMIN_PANEL_NODES = ["btnAdminRefresh", "btnAdminAddOrg", "btnAdminSubs",
+    "btnAdminAccounts", "btnAdminPw", "btnAdminLog", "adminStats", "adminAlerts", "adminList"];
+  // 🛡 بناء 121: آخر شاشة مفتوحة فعلًا — الحارس بيفهم منها إن «لوحة الإدارة»
+  // مفروض ظاهرة دلوقتي (لأنها بتتخفي مشروّع لما أي شاشة تانية تتفتح).
+  let ownerCurrentView = "";
   function rememberOwnerNode(node, parent, label, mode) {
     if (!node || !parent) return;
     if (!OWNER_TAB_NODES.some((r) => r.label === label)) {
@@ -1508,6 +1667,11 @@
     if (rec.mode === "attach" && el.hidden && rec.label === "viewSettings") {
       const n = document.querySelector('.nav-btn[data-view="settings"]');
       return !!(n && n.classList.contains("active"));                    // واقف على الضبط والشاشة مخفية
+    }
+    // 🛡 لوحة الإدارة (بناء 121): المالك واقف عليها والشاشة اتخفت = أذى.
+    // أما وهي شاشة تانية مفتوحة فالإخفاء مشروّع (كود showView نفسه).
+    if (rec.mode === "attach" && el.hidden && rec.label === "viewAdmin") {
+      return ownerCurrentView === "admin";
     }
     return false;
   }
@@ -1542,6 +1706,15 @@
     rememberOwnerNode(vSet, vSet && vSet.parentNode, "viewSettings", "attach");
     const btnAd = document.getElementById("btnAdmin");
     rememberOwnerNode(btnAd, btnAd && btnAd.parentNode, "btnAdmin", "show");
+    // 🛡 بناء 121 (طلب المالك: «تحصين لوحة الإدارة ضروري حالا… متختفيش ابدا من عندي»):
+    // شاشة اللوحة نفسها + أزرارها + محتواها — بنفس مبدأ «مرجع العقدة الحيّ» بتاع 120.
+    // اللوحة attach (بتتخفي مشروّع لما شاشة تانية تتفتح)، والأزرار/المحتوى show.
+    const vAd = document.getElementById("viewAdmin");
+    rememberOwnerNode(vAd, vAd && vAd.parentNode, "viewAdmin", "attach");
+    ADMIN_PANEL_NODES.forEach((id) => {
+      const b = document.getElementById(id);
+      rememberOwnerNode(b, b && b.parentNode, id, "show");
+    });
     ["btnBackupAll", "btnBackupAll2"].forEach((id) => {
       const b = document.getElementById(id);
       rememberOwnerNode(b, b && b.parentNode, id, "show");
@@ -1552,6 +1725,11 @@
       const navLive = document.querySelector('.nav-btn[data-view="settings"]');
       if (navLive && navLive.parentNode) navLive.parentNode.removeChild(navLive);
       const ba0 = document.getElementById("btnAdmin"); if (ba0) ba0.hidden = true;
+      // 🛡 بناء 121: «متظهرش عند حد تاني ابدا» — اللوحة وأزرارها ومحتواها تُقفل
+      // لكل حساب غير المالك (ولو أي كود مستقبلي فتحها بالغلط، الحارس ده بيردها مقفولة).
+      const va0 = document.getElementById("viewAdmin"); if (va0) va0.hidden = true;
+      ADMIN_PANEL_NODES.forEach((id) => { const b = document.getElementById(id); if (b) b.hidden = true; });
+      try { if (typeof stopPresenceView === "function") stopPresenceView(); } catch (e) { }
       ["btnBackupAll", "btnBackupAll2"].forEach((id) => { const b = document.getElementById(id); if (b) b.hidden = true; });
       return false;
     }
@@ -1573,8 +1751,14 @@
   let ownerGuardArmed = false, ownerGuardQueued = false;
   function armOwnerSettingsGuard() {
     if (ownerGuardArmed || typeof MutationObserver !== "function") return;
+    const vAdR = document.getElementById("viewAdmin");
+    const btnAdR = document.getElementById("btnAdmin");
     const roots = [document.querySelector(".sidebar"), document.getElementById("setTabs"),
-      document.getElementById("viewSettings")].filter(Boolean);
+      document.getElementById("viewSettings"),
+      // 🛡 بناء 121: لوحة الإدارة تحت مراقبة نفس الحارس الحيّ. بنراقب **أبوها** مش هي بس:
+      // لو كود شال اللوحة من الشجرة فالطفرة بتحصل على الأب (مراقبتها على اللوحة نفسها
+      // ما تشالش حالة الفصل) — ونفس المنطق على زرار اللوحة اللي في الهيدر بره الـ sidebar.
+      (vAdR && vAdR.parentNode), (btnAdR && btnAdR.parentNode)].filter(Boolean);
     if (!roots.length) return;
     ownerGuardArmed = true;
     try {
@@ -1619,6 +1803,13 @@
       name = "clientSettings";
       toast("هذا القسم للمالك فقط", "error");
     }
+    // 🛡 بناء 121 (طلب المالك: لوحة الإدارة «متظهرش عند حد تاني ابدا»):
+    // أي حساب غير المالك — حتى لو نادى showView("admin") برمجيًا أو من الكونسول —
+    // بيرجع للوحة التحكم، واللوحة ما بتترسمش أصلًا (openAdmin بيرفض قبل أي نداء).
+    if (name === "admin" && !isOwner) {
+      name = "dashboard";
+      toast("لوحة الإدارة لحساب المالك فقط", "error");
+    }
     // «إعدادات مؤسستك» لا تُفتح إلا لمن فعّلها صاحب الشركة (أو المالك/صاحب الشركة)
     if (name === "clientSettings" && !canUseView("clientSettings")) {
       toast("صلاحية «إعدادات مؤسستك» غير مفعّلة لحسابك", "error");
@@ -1652,6 +1843,9 @@
     document.querySelectorAll(".view[data-id]").forEach((v) => {
       v.hidden = v.dataset.id !== name;
     });
+    // 🛡 بناء 121: الحارس الحيّ لازم يعرف المالك واقف على أنهي شاشة، عشان
+    // «لوحة الإدارة» (والوحات المخفية بالتصميم) ما يعاندش إخفاءها المشروّع.
+    ownerCurrentView = name;
     document.querySelectorAll(".nav-btn").forEach((b) => {
       b.classList.toggle("active", b.dataset.view === name);
     });
@@ -1729,7 +1923,13 @@
     const profitSold = sales.filter((s) => isToday(s.invoiceDate)).reduce((m, s) => m + marginOf(s.items), 0);
     const profitReturned = saleReturns.filter((r) => isToday(retDateOf(r))).reduce((m, r) => m + marginOf(r.items), 0);
     const profitToday = profitSold - profitReturned;
+    // 🎨 بناء 123 (بند 5): المبلغ أخضر للمدخل / أحمر للمخرج — الشاشات المالية بس.
+    //    كارت «الرصيد المتاح» ما يتلونش: ده رصيد مش إيراد ولا مصروف.
+    paintDir("#kSales", "in");
+    paintDir("#kPurchases", "out");
+    paintDir("#kExpenses", "out");
     $("#kProfit").textContent = fmt(Math.round(profitToday * 100) / 100) + " ج.م";
+    paintDir("#kProfit", profitToday > 0 ? "in" : profitToday < 0 ? "out" : "");
     $("#kTreasury").textContent = fmt(treTotal) + " ج.م";
 
     const low = products.filter((pr) => pr.qty <= pr.reorder);
@@ -5102,8 +5302,8 @@
           '<td>' + typeName + '</td>' +
           '<td>' + esc(t.accountNo || (t.type === "bank" ? "—" : t.type === "wallet" ? (t.phone || "—") : "—")) + '</td>' +
           '<td class="' + (t.balance > 0 ? "balance-debit" : "balance-credit") + '">' + fmt(t.balance) + ' ج.م</td>' +
-          '<td>' + fmt(tTotals.in) + '</td>' +
-          '<td>' + fmt(tTotals.out) + '</td>' +
+          amtTd(tTotals.in, "in") +
+          amtTd(tTotals.out, "out") +
           '<td class="cell-actions"><button class="btn small blue" type="button" data-act="edit">✏️</button></td>';
         tr.dataset.tid = t.id;
         tbody.appendChild(tr);
@@ -5347,8 +5547,8 @@
         '<td>' + esc(m.date) + '</td>' +
         '<td>' + esc(m.name) + '</td>' +
         '<td style="text-align:right">' + esc(m.desc) + '</td>' +
-        '<td>' + (m.in ? fmt(m.in) : "-") + '</td>' +
-        '<td>' + (m.out ? fmt(m.out) : "-") + '</td>';
+        amtTd(m.in, "in", true) +
+        amtTd(m.out, "out", true);
       tbody.appendChild(tr);
     });
     if (!moves.length) tbody.innerHTML = '<tr><td colspan="5">لا توجد حركات بعد.</td></tr>';
@@ -5463,13 +5663,16 @@
     });
     list.forEach((j) => {
       const tr = document.createElement("tr");
+      // 🆕 بناء 123: القيد اللي على شجرة الإيرادات أخضر، واللي على المصروفات أحمر،
+      // والاختلاط المتوازن ما يتلونش (مافيش لون على تخمين)
+      const jdir = jrnDir(j);
       tr.innerHTML =
         '<td hidden></td>' +
         '<td>' + esc(j.number) + '</td>' +
         '<td>' + esc(j.date) + '</td>' +
         '<td style="text-align:right">' + esc(j.desc) + '</td>' +
-        '<td>' + fmt(j.debit) + '</td>' +
-        '<td>' + fmt(j.credit) + '</td>' +
+        amtTd(j.debit, jdir) +
+        amtTd(j.credit, jdir) +
         '<td>' + esc(j.ref) + '</td>';
       tr.addEventListener("dblclick", () => {
         if (confirm("هل تريد طباعة كشف القيد رقم (" + j.number + ")؟")) {
@@ -5754,8 +5957,11 @@
 
   function liveBalanceHint(amountSelId, treasurySelId, hintSelId, mode) {
     const hint = $(hintSelId);
-    if (!hint) return;
     const m = typeof mode === "function" ? mode() : mode;
+    // 🎨 بناء 123 (بند 5): خانة المبلغ بتاخد اتجاه العملية (قبض أخضر / صرف أحمر).
+    //    التحويل «مافيش عليه لون»: المبلغ مش إيراد ولا مصروف، ده بنقل بين حسابات الشركة.
+    paintDir(amountSelId, m === "income" ? "in" : m === "expense" ? "out" : "");
+    if (!hint) return;
     const base = hint.dataset.base !== undefined ? hint.dataset.base : (hint.textContent || "");
     const amount = round2(moneyVal(amountSelId));
     const tid = parseInt((($(treasurySelId) || {})).value, 10);
@@ -6064,14 +6270,16 @@
       tr0.innerHTML = '<td>—</td><td>—</td><td style="text-align:right">رصيد افتتاحي</td><td>-</td><td>-</td><td>' + fmt(led.opening) + '</td>';
       tbody.appendChild(tr0);
     }
+    // 🆕 بناء 123: دفتر حركة حساب إيراد (شجرة 4) أو مصروف (شجرة 5) — حركته تتلون باتجاه الحساب
+    const ldir = moneyDirOf(led.acc);
     led.rows.forEach((r) => {
       const tr = document.createElement("tr");
       tr.innerHTML =
         '<td>' + esc(r.date) + '</td>' +
         '<td>' + esc(r.number) + '</td>' +
         '<td style="text-align:right">' + esc(r.desc) + '</td>' +
-        '<td>' + (r.debit ? fmt(r.debit) : "-") + '</td>' +
-        '<td>' + (r.credit ? fmt(r.credit) : "-") + '</td>' +
+        amtTd(r.debit, ldir, true) +
+        amtTd(r.credit, ldir, true) +
         '<td>' + fmt(r.run) + '</td>';
       tbody.appendChild(tr);
     });
@@ -6707,14 +6915,16 @@
       tr0.innerHTML = '<td>—</td><td>—</td><td style="text-align:right">رصيد افتتاحي</td><td>-</td><td>-</td><td>' + fmt(led.opening) + '</td>';
       tbody.appendChild(tr0);
     }
+    // 🆕 بناء 123: كشف حساب حساب من شجرة الإيرادات (4) ⇒ حركاته خضرا، ومن المصروفات (5) ⇒ حمرا
+    const adir = moneyDirOf(acc);
     rows.forEach((r) => {
       const tr = document.createElement("tr");
       tr.innerHTML =
         '<td>' + esc(r.date) + '</td>' +
         '<td>' + esc(r.number == null ? "—" : r.number) + '</td>' +
         '<td style="text-align:right">' + esc(r.desc) + '</td>' +
-        '<td>' + (r.debit ? fmt(r.debit) : "-") + '</td>' +
-        '<td>' + (r.credit ? fmt(r.credit) : "-") + '</td>' +
+        amtTd(r.debit, adir, true) +
+        amtTd(r.credit, adir, true) +
         '<td class="' + (r.balance > 0 ? "balance-debit" : "balance-credit") + '">' + fmt(r.balance) + '</td>';
       tbody.appendChild(tr);
     });
@@ -6864,8 +7074,8 @@
       tr.innerHTML =
         '<td>' + esc(r.date) + '</td>' +
         '<td style="text-align:right">' + esc(r.desc) + '</td>' +
-        '<td>' + (r.in ? fmt(r.in) : "-") + '</td>' +
-        '<td>' + (r.out ? fmt(r.out) : "-") + '</td>' +
+        amtTd(r.in, "in", true) +
+        amtTd(r.out, "out", true) +
         '<td class="' + (r.run > 0 ? "balance-debit" : "balance-credit") + '">' + fmt(r.run) + '</td>';
       tb.appendChild(tr);
     });
@@ -6958,7 +7168,7 @@
         .sort((a, b) => b.val - a.val);
     };
 
-    const fill = (tbodyId, rows, cols) => {
+    const fill = (tbodyId, rows, cols, dir) => {
       const tb = $(tbodyId);
       tb.innerHTML = "";
       if (!rows.length) {
@@ -6967,15 +7177,16 @@
       }
       rows.forEach((r) => {
         const tr = document.createElement("tr");
-        tr.innerHTML = '<td>' + esc(r.name) + '</td><td>' + esc(r.qty != null ? Number(r.qty).toLocaleString("en-US") : r.count) + '</td><td>' + fmt(r.val) + '</td>';
+        // 🆕 بناء 123: عمود القيمة في التقارير — المبيعات/العملاء = إيراد (أخضر)، المشتريات/الموردين = مصروف (أحمر)
+        tr.innerHTML = '<td>' + esc(r.name) + '</td><td>' + esc(r.qty != null ? Number(r.qty).toLocaleString("en-US") : r.count) + '</td>' + amtTd(r.val, dir);
         tb.appendChild(tr);
       });
     };
 
-    fill("#dgvRepSales tbody", agg(sales, true).slice(0, 15), 3);
-    fill("#dgvRepPurch tbody", agg(purchases, false).slice(0, 15), 3);
-    fill("#dgvRepCust tbody", aggParty(sales, true), 3);
-    fill("#dgvRepSupp tbody", aggParty(purchases, false), 3);
+    fill("#dgvRepSales tbody", agg(sales, true).slice(0, 15), 3, "in");
+    fill("#dgvRepPurch tbody", agg(purchases, false).slice(0, 15), 3, "out");
+    fill("#dgvRepCust tbody", aggParty(sales, true), 3, "in");
+    fill("#dgvRepSupp tbody", aggParty(purchases, false), 3, "out");
 
     const sTot = sales.filter((i) => inRange(i.invoiceDate)).reduce((m, i) => m + (i.grandTotal || 0), 0);
     const pTot = purchases.filter((i) => inRange(i.invoiceDate)).reduce((m, i) => m + (i.grandTotal || 0), 0);
@@ -7986,7 +8197,7 @@
       set(LS_SUP_TXS, o.supplierTxs || []);
       set(LS_ACCOUNTS, o.accounts || seedAccounts);
       set(LS_JOURNAL, o.journalEntries || []);
-      set(LS_USERS, o.users || seedUsers);
+      set(LS_USERS, o.users || (demoAllowedHere() ? seedUsers : []));
       set(LS_VOUCHERS, o.vouchers || []);
       set(LS_ACTIVITY, o.activity || []);
       loadData();
@@ -8842,6 +9053,7 @@ const pwEye = document.getElementById("btnShowPass");
     try { loadData(); } finally { A.cleaning = false; }
     mirror();
     // 🛡 نخفي شاشات البرنامج القديمة حتى لا تبقى خلف شاشة الدخول
+    ownerCurrentView = "";   // 🛡 بناء 121: مافيش شاشة «نشطة» دلوقتي ⇒ الحارس ما يعاندش إخفاء اللوحات
     document.querySelectorAll(".view").forEach((v) => { v.hidden = true; });
   }
 
@@ -8943,7 +9155,10 @@ const pwEye = document.getElementById("btnShowPass");
           startPlanWatch();
           startPresence();
           // هل المالك (سوبر أدمن)؟ → زرار الإدارة + شاشة إعدادات المالك
-          const isAdmin = !!(acc && acc.is_superadmin);
+          // 🛡 بناء 121: لو صف `is_superadmin` وصل ناقص من مصدر واحد، ownerHasAllAccess()
+          // بيلزم أي مصدر سحابي تاني (profile/me) — فلوحة الإدارة ما تقفلش على المالك.
+          // العكس آمن: أي حساب غير المالك لسه isAdmin=false واللوحة مقفولة + بوابة showView/openAdmin.
+          const isAdmin = !!(acc && acc.is_superadmin) || ownerHasAllAccess();
           window.__isOwner = isAdmin;
           $("#viewAdmin").hidden = !isAdmin;
           $("#viewSettings").hidden = !isAdmin;
@@ -10766,6 +10981,13 @@ const pwEye = document.getElementById("btnShowPass");
   };
 
   function openAdmin() {
+    // 🛡 بناء 121: بوابة أولى قبل أي رسم/نداء — اللوحة للمالك (سوبر أدمن) فقط.
+    // (مش كفاية إن الزرار مخفي: أي مسار مستقبلي ينادي openAdmin ما يفتحش بيانات الشركات)
+    if (!(ownerHasAllAccess() || !!window.__isOwner)) {
+      toast("لوحة الإدارة لحساب المالك فقط", "error");
+      showView("dashboard");
+      return;
+    }
     hideScreens();
     $("#denyScreen").hidden = true;
     renderAdminOrgs();
