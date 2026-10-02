@@ -7437,7 +7437,9 @@
       data[key] = list;
       root.hidden = true;
       renderSettGrid(root.__prefix, root.__type);
-      toast("تم التعديل محليًا. اضغط «حفظ جميع تبويبات» لحفظه.", "info");
+      // 🛡 بناء 124: التعديل كان «في الذاكرة بس» لحد ما المستخدم يضغط حفظ — يقفل
+      // البرنامج يضيع. دلوقتي بيتخزن على الجهاز فورًا ويترفع للسحابة لو متاحة.
+      settAutosave(root.__prefix, root.__type);
     };
   }
 
@@ -7477,14 +7479,15 @@
         if (typeof renderTreasury === "function") { try { renderTreasury(); } catch (e) { } }
       }
       renderSettGrid(prefix, type);
-      toast("تم الحذف محليًا. اضغط «حفظ جميع تبويبات» لحفظه.", "info");
+      // 🛡 بناء 124: الحذف اتأكّد عليه المستخدم ⇒ يتخزن على الجهاز ويترفع فورًا
+      settAutosave(prefix, type, { force: true });
       return;
     }
     if (!confirm("حذف «" + nm + "»؟")) return;
     list.splice(idx, 1);
     data[key] = list;
     renderSettGrid(prefix, type);
-    toast("تم الحذف محليًا. اضغط «حفظ جميع تبويبات» لحفظه.", "info");
+    settAutosave(prefix, type, { force: true });
   };
 
   // مُحوّل معرّفات حقول الضبط: شاشة العميل بادئتها «c» (csetOrgName) وشاشة المالك
@@ -7524,6 +7527,8 @@
   // قراءة حقول بيانات المنشأة / الضريبة إلى كائن org (قبل الحفظ)
   function settReadOrgFields(prefix) {
     const p = settPayload(prefix);
+    // 🛡 بناء 124: من غير حمولة (تحميل فشل) ما نبنيش org من الفراغ — كان بيرمي TypeError
+    if (!p) return null;
     const org = p.org || {};
     const v = (name) => { const el = settFieldEl(prefix, name); return el ? el.value.trim() : null; };
     // لو الحقل مش موجود في الواجهة نترك القيمة كما هي (ولا نمسحها بإرسال فاضي)
@@ -7566,14 +7571,284 @@
     try { saveSettings(); } catch (e) {}
   }
 
+  /* ============ 🛡 بناء 124: قوائم الضبط ما تضيعش وما تُمسحش (بلاغ «وحدات القياس بتتمسح») ============
+   * المالك 02/10: «وحدات القياس للشركه بتتمسح بعد ما صاحب الشركه يقفل البرنامج صلح الخطا».
+   * قياس القاعدة الحيّة (قراءة فقط، probe_units_wipe.js): شركة واحدة بس فيها وحدات
+   * (المجد: 4 أسطر من 30/9)، وباقي الشركات **صفر** — مع إن أصنافها وفواتيرها بتستعمل
+   * «قطعه» و«وحدة» (القاهرة: 3 أصناف و4 أسطر فاتورة). يعني الوحدات إمّا ما اتحفظتش
+   * أبدًا أو اتمسحت. السببان الجذريان في الكود:
+   *  (١) الإضافة/التعديل/الحذف في التبويبات كانت **في الذاكرة بس** لحد ما المستخدم
+   *      يضغط «حفظ» — التوست «تم التعديل محليًا» بيختفي، يقفل البرنامج ⇒ يضيع كله.
+   *  (٢) دوال الحفظ السحابية «استبدال كامل»: أي قائمة توصل غير null ⇒ delete + insert.
+   *      و`payload.units || null` ما كانتش بتفرّق بين «مش موجود» و«فاضي» (`[]` truthy)،
+   *      فالهيكل الفاضي اللي بيتبني وقت انقطاع الاتصال — أو لو رجعت السحابة null —
+   *      كان بيتبعت كله ⇒ مسح جماعي للقوائم الستة.
+   * القواعد الجديدة: (أ) أي تعديل يتخزن على الجهاز فورًا ويرجع يظهر بعد إعادة الفتح
+   * لحد ما يترفع؛ (ب) **مفيش قائمة تترفع للسحابة إلا لو اتحمّلت منها فعلًا**؛
+   * (ج) تفريغ قائمة فيها أسطر على السحابة محتاج تأكيدًا صريحًا بالعدد. */
+  const SETT_LIST_KEYS = ["categories", "units", "warehouses", "owners", "wallets", "banks"];
+  const SETT_LIST_AR = {
+    categories: "التصنيفات", units: "وحدات القياس", warehouses: "المستودعات",
+    owners: "الملاك والشركاء", wallets: "المحافظ الإلكترونية", banks: "الحسابات البنكية"
+  };
+  const SETT_PENDING_PREFIX = "mizan_sett_pending_v1_";
+  // حالة تحميل كل جلسة: ok=true **بس** بعد ما الحمولة جت من السحابة فعلًا
+  let settLoad = { c: { ok: false, err: "", at: null }, s: { ok: false, err: "", at: null, orgId: null } };
+  // مرجع «كان فيه كام سطر على السحابة» وقت التحميل — بيه بنكشف محاولة التفريغ
+  let settBaseline = { c: {}, s: {} };
+
+  function settCurrentOrgId() {
+    try { if (window.DATA && DATA.orgId) { const v = DATA.orgId(); if (v) return String(v); } } catch (e) { }
+    try { const o = (window.DATA && DATA.org) ? DATA.org() : null; if (o && o.id) return String(o.id); } catch (e) { }
+    try { const s = localStorage.getItem(LS_STATE_ORG); if (s) return String(s); } catch (e) { }
+    return null;
+  }
+  // مفتاح التخزين المحلي **لكل شركة على حدة** — شركة تانية ما تقرأش ولا تمسحش تعديل دي
+  function settPendingKey(prefix) {
+    const id = prefix === "s"
+      ? ("own_" + ((settLoad.s && settLoad.s.orgId) || "none"))
+      : (settCurrentOrgId() || "local");
+    return SETT_PENDING_PREFIX + id;
+  }
+  function settReadPending(prefix) {
+    try {
+      const raw = localStorage.getItem(settPendingKey(prefix));
+      if (!raw) return null;
+      const p = JSON.parse(raw);
+      return (p && typeof p === "object") ? p : null;
+    } catch (e) { return null; }
+  }
+  function settWritePending(prefix, key, list) {
+    try {
+      const all = settReadPending(prefix) || {};
+      all[key] = JSON.parse(JSON.stringify(list || []));
+      all.__at = new Date().toISOString();
+      localStorage.setItem(settPendingKey(prefix), JSON.stringify(all));
+      return true;
+    } catch (e) { return false; }
+  }
+  function settDropPending(prefix, key) {
+    try {
+      const k = settPendingKey(prefix);
+      const all = settReadPending(prefix);
+      if (!all) return;
+      if (key) delete all[key];
+      const left = SETT_LIST_KEYS.filter((x) => Array.isArray(all[x]));
+      if (!key || !left.length) localStorage.removeItem(k);
+      else localStorage.setItem(k, JSON.stringify(all));
+    } catch (e) { }
+  }
+  function settPendingKeys(prefix) {
+    const all = settReadPending(prefix) || {};
+    return SETT_LIST_KEYS.filter((k) => Array.isArray(all[k]) && all[k].length);
+  }
+
+  function settMarkLoaded(prefix, payload, orgId) {
+    settLoad[prefix] = prefix === "s"
+      ? { ok: true, err: "", at: new Date().toISOString(), orgId: orgId || (settLoad.s && settLoad.s.orgId) || null }
+      : { ok: true, err: "", at: new Date().toISOString() };
+    const b = {};
+    SETT_LIST_KEYS.forEach((k) => { b[k] = Array.isArray(payload && payload[k]) ? payload[k].length : 0; });
+    settBaseline[prefix] = b;
+    if (payload && payload.__online === undefined) payload.__online = true;
+  }
+  function settMarkFailed(prefix, err, orgId) {
+    settLoad[prefix] = prefix === "s"
+      ? { ok: false, err: String(err || ""), at: new Date().toISOString(), orgId: orgId || null }
+      : { ok: false, err: String(err || ""), at: new Date().toISOString() };
+    settBaseline[prefix] = {};
+  }
+  function settIsLoaded(prefix) { return !!(settLoad[prefix] && settLoad[prefix].ok); }
+
+  /* القائمة اللي تتبعت للسحابة، أو null = «ما تبعتش خالص» (الدالة ما تلمسش الجدول).
+   * بترفض لو الحمولة ما اتحمّلتش من السحابة، ولو هتفرّغ قائمة فيها أسطر بتطلب تأكيدًا. */
+  function settSafeList(prefix, key, opts) {
+    const why = (opts && opts.why) ? opts.why : null;
+    const p = settPayload(prefix);
+    if (!p || !Array.isArray(p[key])) { if (why) why.v = "nopayload"; return null; }
+    if (!settIsLoaded(prefix)) { if (why) why.v = "notloaded"; return null; }
+    const before = Number((settBaseline[prefix] || {})[key] || 0);
+    const now = p[key].length;
+    if (before > 0 && now === 0 && !(opts && opts.force)) {
+      const label = SETT_LIST_AR[key] || key;
+      const ok = (typeof confirm === "function")
+        ? confirm("⚠️ قائمة «" + label + "» فيها " + before + (before < 11 ? " أسطر" : " سطرًا") +
+          " محفوظة على السحابة، واللي هيتبعت دلوقتي فاضي.\n\nيعني هتتمسح كلها.\n\nلو متأكد اضغط «موافق»، ولو لأ اضغط «إلغاء» وسيب القائمة زي ما هي.")
+        : false;
+      if (!ok) { if (why) why.v = "cancelled"; return null; }
+    }
+    return p[key];
+  }
+  /* حمولة «حفظ جميع التبويبات» الآمنة: org دايمًا + القوائم اللي بس مسموح تبعتها،
+   * وأي قائمة مرفوضة بتتسجل عشان نصارح المستخدم بدل ما تضيع في صمت. */
+  function settSafePayload(prefix) {
+    const src0 = settPayload(prefix);
+    if (!src0) return { payload: {}, skipped: SETT_LIST_KEYS.slice(), noPayload: true };
+    settReadOrgFields(prefix);
+    const src = settPayload(prefix) || {};
+    const out = {};
+    const skipped = [];
+    if (src.org) out.org = src.org;
+    SETT_LIST_KEYS.forEach((k) => {
+      if (!(k in src)) return;
+      const v = settSafeList(prefix, k);
+      if (v === null) { skipped.push(k); return; }
+      out[k] = v;
+    });
+    return { payload: out, skipped: skipped, noPayload: false };
+  }
+  function settSkipText(skipped) {
+    if (!skipped || !skipped.length) return "";
+    return "ملحوظة: " + skipped.map((k) => SETT_LIST_AR[k] || k).join("، ") +
+      " ما اترفعتش لأن بياناتها ما اتحمّلتش من السحابة (منعًا لمسحها) — اضغط «🔄 تحديث» وبعدين احفظ تاني.";
+  }
+
+  function settRowSig(key, r) {
+    if (!r) return "";
+    if (r.id) return "id:" + r.id;
+    const nm = String(r.name || "").trim();
+    const extra = key === "units" ? String(r.symbol || "").trim()
+      : key === "warehouses" ? String(r.code || "").trim()
+        : String(r.account_no || "").trim();
+    return "n:" + nm + "|" + extra;
+  }
+  /* بعد تحميل ناجح: أي تعديل اتخزن على الجهاز وما اترفعش يرجع يظهر (اتحاد بالهوية/الاسم)
+   * بدل ما يضيع — وبنقول للمستخدم صراحةً إن فيه لسه ما اترفعش. */
+  function settApplyPending(prefix) {
+    const pend = settReadPending(prefix);
+    const res = { added: {}, stale: [], left: [] };
+    if (!pend) return res;
+    const p = settPayload(prefix);
+    if (!p) { res.left = settPendingKeys(prefix); return res; }
+    SETT_LIST_KEYS.forEach((k) => {
+      if (!Array.isArray(pend[k]) || !pend[k].length) return;
+      if (!Array.isArray(p[k])) p[k] = [];
+      const have = new Set(p[k].map((r) => settRowSig(k, r)));
+      const names = new Set(p[k].map((r) => String((r && r.name) || "").trim()).filter(Boolean));
+      let added = 0, missing = 0;
+      pend[k].forEach((r) => {
+        const sig = settRowSig(k, r);
+        const nm = String((r && r.name) || "").trim();
+        if (have.has(sig) || (nm && names.has(nm))) return;
+        missing++;
+        p[k].push(r);
+        have.add(sig);
+        if (nm) names.add(nm);
+        added++;
+      });
+      if (added) res.added[k] = added;
+      if (!missing) res.stale.push(k);        // كله موجود على السحابة ⇒ النسخة المحلية بقت قديمة
+      else res.left.push(k);
+    });
+    res.stale.forEach((k) => settDropPending(prefix, k));
+    return res;
+  }
+  // لافتة واحدة صريحة في شاشة الضبط (بدل التوست اللي بيختفي)
+  function settNoticeBox(prefix) {
+    return document.getElementById(prefix === "s" ? "settNoticeOwner" : "settNotice");
+  }
+  function settNotice(msg, kind, prefix) {
+    const box = settNoticeBox(prefix);
+    if (!box) return;
+    box.textContent = "";
+    box.hidden = !msg;
+    box.className = "sett-notice" + (kind ? " " + kind : "");
+    if (!msg) return;
+    box.appendChild(document.createTextNode(msg));
+  }
+  function settNoticePending(prefix) {
+    const left = settPendingKeys(prefix);
+    if (!left.length) { settNotice("", "", prefix); return; }
+    settNotice("⏳ فيه تعديلات محفوظة على الجهاز لسه ما اترفعتش للسحابة: " +
+      left.map((k) => SETT_LIST_AR[k] || k).join("، ") +
+      ". اضغط «💾 حفظ» في التبويب لرفعها — مش هتضيع لو قفلت البرنامج.", "warn", prefix);
+  }
+  /* وحدات مستعملة في الأصناف/الفواتير ومش موجودة في القائمة — بنعرضها كزرار اختياري
+   * (بلا أي كتابة صامتة على السحابة): العميل يرجّع وحداته بضغطة بعد ما كانت بتضيع. */
+  function settMissingUnits() {
+    const p = csetData;
+    const have = new Set(((p && Array.isArray(p.units)) ? p.units : [])
+      .map((u) => String((u && (typeof u === "string" ? u : (u.name || u.symbol))) || "").trim())
+      .filter(Boolean));
+    const miss = [];
+    const add = (v) => {
+      const n = String(v || "").trim();
+      if (!n || have.has(n) || miss.indexOf(n) >= 0) return;
+      miss.push(n);
+    };
+    try { (products || []).forEach((x) => add(x && x.unit)); } catch (e) { }
+    try {
+      (sales || []).forEach((s) => (s && Array.isArray(s.items) ? s.items : []).forEach((it) => add(lineUnit(it))));
+      (purchases || []).forEach((s) => (s && Array.isArray(s.items) ? s.items : []).forEach((it) => add(lineUnit(it))));
+    } catch (e) { }
+    return miss;
+  }
+  function settOfferMissingUnits() {
+    const box = document.getElementById("settNotice");
+    if (!box || !csetData || !settIsLoaded("c")) return;
+    const miss = settMissingUnits();
+    if (!miss.length) return;
+    const old = box.querySelector("#btnFixUnits");
+    if (old) old.remove();
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "btnFixUnits";
+    btn.className = "btn small blue";
+    btn.style.marginTop = "6px";
+    btn.textContent = "➕ أضف الوحدات المستعملة في الأصناف (" + miss.length + "): " + miss.join("، ");
+    btn.addEventListener("click", function () {
+      if (!Array.isArray(csetData.units)) csetData.units = [];
+      miss.forEach((n) => {
+        const dup = csetData.units.some((u) => String((u && (u.name || u.symbol)) || "").trim() === n);
+        if (!dup) csetData.units.push({ id: null, name: n, symbol: "", created_at: new Date().toISOString() });
+      });
+      renderSettGrid("c", "unit");
+      settWritePending("c", "units", csetData.units);
+      settAutosave("c", "unit");
+    });
+    box.hidden = false;
+    box.appendChild(document.createElement("br"));
+    box.appendChild(btn);
+  }
+  /* التخزين الفوري على الجهاز + الرفع للسحابة أول ما يكون متاح.
+   * دي النقطة اللي كانت بتضيّع الشغل: من غيرها أي إضافة كانت في الذاكرة بس. */
+  function settAutosave(prefix, type, opts) {
+    const def = SETT_TYPES[type];
+    const key = def ? def.key : null;
+    if (!key) return;
+    const p = settPayload(prefix);
+    const list = (p && Array.isArray(p[key])) ? p[key] : [];
+    const stored = settWritePending(prefix, key, list);
+    const canCloud = A.online && window.DATA && settIsLoaded(prefix) &&
+      ((prefix === "c" && DATA.saveClientSett) || (prefix === "s" && DATA.adminSettSave));
+    if (canCloud) { saveSettPane(prefix, type, opts); return; }
+    if (stored) {
+      settNoticePending(prefix);
+      toast("اتحفظ «" + (def.title || "") + "» على جهازك ✓ — هيترفع للسحابة أول ما تفتح والنت شغال.", "info");
+    } else {
+      toast("تعذّر الحفظ على الجهاز. افتح الشبكة واضغط «💾 حفظ» قبل ما تقفل البرنامج.", "warning");
+    }
+  }
+
   // ================== العميل: تحميل وحفظ تبويبات شركته ==================
   function loadClientSettingsForm() {
     try { renderDocRootBox(); } catch (e) {} // build 105: صندوق مسار المستندات
     if (A.online && DATA && DATA.clientSett) {
       $("#csettTabs").disabled = true;
       DATA.clientSett().then((p) => {
-        csetData = p || { org: {}, categories: [], units: [], warehouses: [], owners: [], wallets: [], banks: [] };
+        // 🛡 بناء 124: `p || skeleton` كان بيعلّم هيكلًا فاضيًا إنه «من السحابة» (__online)
+        // ⇒ أي حفظ بعده كان بيمسح القوائم الستة. الحمولة الناقصة/null = **ما اتحمّلتش**.
+        if (!p || typeof p !== "object") {
+          settMarkFailed("c", "السحابة رجعت حمولة فاضية");
+          csetData = null;
+          renderAllSettPanes("c");
+          settNotice("⚠️ تعذّر قراءة إعدادات مؤسستك من السحابة (رجعت فاضية). القوائم مقفولة للحفظ لحد ما تتحمّل — اضغط «🔄 تحديث». مافيش حاجة هتتمسح.", "err", "c");
+          try { renderCItems(); } catch (e) {}
+          return;
+        }
+        csetData = p;
         csetData.__online = true;
+        settMarkLoaded("c", csetData);
         if (csetData && csetData.org) {
           if (csetData.org.tax_enabled !== undefined && csetData.org.tax_enabled !== null) {
             applyTaxSettings(csetData.org.tax_enabled, csetData.org.tax_rate);
@@ -7586,16 +7861,44 @@
         syncTreasuryFromSett();
         // 🛡 بناء 119: المرجع اللي بنقارن بيه بعد كده = اللي ظهر قدام المستخدم الآن
         try { captureOpeningBaseline(); } catch (e) {}
+        // 🛡 بناء 124: أي تعديل محفوظ على الجهاز وما اترفعش يرجع يظهر (مش يضيع)
+        try {
+          const merged = settApplyPending("c");
+          const names = Object.keys(merged.added || {});
+          if (names.length) {
+            toast("رجّعنا تعديلاتك المحفوظة على الجهاز: " +
+              names.map((k) => (SETT_LIST_AR[k] || k) + " (+" + merged.added[k] + ")").join("، ") +
+              " — اضغط حفظ لرفعها.", "info");
+          }
+        } catch (e) {}
         renderAllSettPanes("c");
         renderCItems(); // 🆕 بناء 115: بنود المصروفات والإيرادات (من دليل الحسابات مش من payload الضبط)
-      }).catch((e) => toast("تعذّر تحميل إعدادات مؤسستك: " + (e.message || e), "error"));
+        try { settNoticePending("c"); settOfferMissingUnits(); } catch (e) {}
+      }).catch((e) => {
+        // 🛡 بناء 124: فشل التحميل = القوائم **مش محمّلة** ⇒ الحفظ ما يرفعهاش خالص (منع المسح)
+        settMarkFailed("c", (e && e.message) || e);
+        toast("تعذّر تحميل إعدادات مؤسستك: " + (e.message || e), "error");
+        settNotice("⚠️ تعذّر تحميل إعدادات مؤسستك من السحابة: " + ((e && e.message) || e) +
+          ". القوائم مقفولة للحفظ لحد ما تتحمّل — اضغط «🔄 تحديث». مافيش حاجة هتتمسح.", "err", "c");
+        try { renderAllSettPanes("c"); } catch (e2) {}
+      });
       return;
     }
+    // وضع بلا شبكة: هيكل محلي للقراءة/العرض فقط — **مش محمّل من السحابة** ⇒ ممنوع يترفع
+    settMarkFailed("c", "لا يوجد اتصال بالسحابة");
     csetData = {
       org: { name: settings.orgName || "", phone: settings.orgPhone || "", address: settings.orgAddress || "", tax_number: settings.orgVat || "", org_note: settings.orgNote || "", tax_enabled: !!settings.taxEnabled, tax_rate: Math.round((settings.taxRate || 0) * 100), tax_title: "", paper_size: settings.paperSize || "A4", warranty_terms: settings.orgWarranty || "", invoice_fields: normalizeInvFields(settings.invFields) },
       categories: [], units: [], warehouses: [], owners: [], wallets: [], banks: []
     };
-    renderAllSettPanes("c");
+    try {
+      // الوحدات/القوائم المحفوظة على الجهاز تظهر حتى من غير شبكة (بدل شاشة فاضية)
+      const merged = settApplyPending("c");
+      renderAllSettPanes("c");
+      if (settPendingKeys("c").length) settNoticePending("c");
+      else if (Object.keys(merged.added || {}).length) renderAllSettPanes("c");
+    } catch (e) {
+      renderAllSettPanes("c");
+    }
     renderCItems(); // 🆕 بناء 115
   }
 
@@ -7605,16 +7908,39 @@
   }
 
   function saveClientSettingsForm() {
-    const payload = gatherSettPayload("c");
+    // 🛡 بناء 124: الحمولة الآمنة — القوائم اللي ما اتحمّلتش من السحابة ما تتبعتش خالص
+    const safe = settSafePayload("c");
+    const payload = safe.payload;
+    if (safe.noPayload || !payload.org) {
+      settNotice("⚠️ إعدادات مؤسستك لسه ما اتحمّلتش من السحابة، فالحفظ مقفول عشان ما نضيّعش حاجة. اضغط «🔄 تحديث» وجرّب تاني.", "err", "c");
+      toast("تعذّر الحفظ: البيانات لسه ما اتحمّلتش. اضغط «🔄 تحديث».", "warning");
+      return;
+    }
     const doAfter = () => {
       applyTaxSettings(payload.org.tax_enabled, payload.org.tax_rate);
       mirrorOrgToSettings(payload.org);
       addActivity("إعدادات", "تعديل إعدادات المؤسسة");
-      toast("تم حفظ إعدادات مؤسستك بنجاح.", "success");
+      // اللي اترفع فعلًا يتشال من نسخة الجهاز، واللي لسه معلّق يفضل ظاهر في اللافتة
+      SETT_LIST_KEYS.forEach((k) => { if (Array.isArray(payload[k])) settDropPending("c", k); });
+      try {
+        const left = settPendingKeys("c");
+        if (left.length) settNoticePending("c");
+        else { settNotice(safe.skipped.length ? settSkipText(safe.skipped) : "", safe.skipped.length ? "warn" : "", "c"); }
+      } catch (e) { }
+      toast("تم حفظ إعدادات مؤسستك بنجاح." + (safe.skipped.length ? " (" + settSkipText(safe.skipped) + ")" : ""), "success");
     };
     if (A.online && DATA && DATA.saveClientSett) {
-      DATA.saveClientSett(payload).then(doAfter).catch((e) => toast("خطأ في الحفظ: " + (e.message || e), "error"));
-    } else doAfter();
+      DATA.saveClientSett(payload).then(doAfter).catch((e) => {
+        // الحفظ فشل ⇒ التعديلات تتخزن على الجهاز وتفضل مطالبة بالرفع (مش تضيع)
+        try { SETT_LIST_KEYS.forEach((k) => { if (Array.isArray(payload[k])) settWritePending("c", k, payload[k]); }); settNoticePending("c"); } catch (e2) { }
+        toast("خطأ في الحفظ: " + (e.message || e) + " — تعديلاتك محفوظة على الجهاز ومش هتضيع.", "error");
+      });
+    } else {
+      // بلا شبكة: نخزن على الجهاز فورًا عشان قفل البرنامج ما يضيّعش الشغل
+      try { SETT_LIST_KEYS.forEach((k) => { if (Array.isArray(payload[k])) settWritePending("c", k, payload[k]); }); } catch (e) { }
+      doAfter();
+      try { settNoticePending("c"); } catch (e) { }
+    }
   }
 
   // بعد حفظ أي تبويب ضبط: تحدّث القوائم الحية المفتوحة (تصنيفات/وحدات/مستودعات) فورًا
@@ -7648,17 +7974,30 @@
   }
 
   // حفظ تبويب واحد فقط (منفصل لكل قائمة): يرسل جزئه فقط دون المساس بالباقي
-  function saveSettPane(prefix, type) {
+  function saveSettPane(prefix, type, opts) {
     const isOwner = prefix === "s";
     const ttl = type === "org" ? "بيانات المنشأة" : type === "tax" ? "الضريبة والفواتير" : (SETT_TYPES[type] ? SETT_TYPES[type].title : type);
     let payload = {};
-    if (type === "org" || type === "tax") {
+    const paneKey = (type === "org" || type === "tax") ? null : (SETT_TYPES[type] ? SETT_TYPES[type].key : null);
+    if (!paneKey) {
       // يقرأ حقول المنشأة/الضريبة الحالية من الواجهة ويحدّث كائن org فقط (لا يمسّ القوائم)
-      settReadOrgFields(prefix);
-      payload.org = settPayload(prefix).org;
+      const org = settReadOrgFields(prefix);
+      if (!org) { toast("البيانات لسه ما اتحمّلتش — اضغط «🔄 تحديث».", "warning"); return; }
+      payload.org = org;
     } else {
-      const key = SETT_TYPES[type].key;
-      payload[key] = settList(prefix, type).slice();
+      // 🛡 بناء 124: القائمة ما تترفعش إلا لو اتحمّلت من السحابة فعلًا، وتفريغها محتاج تأكيدًا
+      const why = {};
+      const list = settSafeList(prefix, paneKey, { why: why, force: !!(opts && opts.force) });
+      if (list === null) {
+        if (why.v === "cancelled") { toast("تمام — سيبنا «" + ttl + "» زي ما هي وما مسحناش حاجة.", "info"); return; }
+        // ما اتحمّلتش ⇒ نخزن على الجهاز (الشغل ما يضيعش) ونمنع الرفع
+        try { settWritePending(prefix, paneKey, settList(prefix, type)); } catch (e) { }
+        if (isOwner) { toast("اختر الشركة واستنى تحميل بياناتها قبل الحفظ.", "warning"); return; }
+        settNoticePending(prefix);
+        toast("تعذّر تحميل «" + ttl + "» من السحابة، فحفظناها على جهازك ومنعنا رفعها عشان ما تُمسحش. اضغط «🔄 تحديث» وبعدين احفظ.", "warning");
+        return;
+      }
+      payload[paneKey] = list.slice();
     }
     const after = () => {
       if (payload.org) {
@@ -7667,6 +8006,8 @@
         // مفيش منطق إن إعدادات شركة تانية تدخل في إعدادات المالك المحلي.
         if (prefix === "c") mirrorOrgToSettings(payload.org);
       }
+      // 🛡 بناء 124: اللي اترفع للسحابة بنجاح يخرج من نسخة الجهاز المعلّقة
+      if (paneKey) { try { settDropPending(prefix, paneKey); settNoticePending(prefix); } catch (e) { } }
       renderAllSettPanes(prefix);
       // الضبط هو المرجع → حدّث القوائم الحية بعد الحفظ مباشرة
       try {
@@ -7685,9 +8026,15 @@
         syncOpenListsAfterSett();
         renderAllSettPanes(prefix);
         if (!document.getElementById("viewTreasury").hidden) renderTreasury();
+        if (prefix === "c" && paneKey === "units") { try { settOfferMissingUnits(); } catch (e) { } }
       } catch (e) {}
       addActivity("إعدادات", "حفظ تبويب «" + ttl + "»");
-      toast("تم حفظ «" + ttl + "» بنجاح.", "success");
+      toast("تم حفظ «" + ttl + "» على السحابة بنجاح ✓", "success");
+    };
+    // فشل الرفع ⇒ التعديل يفضل محفوظًا على الجهاز ومطلوب في اللافتة (ما يضيعش أبدًا)
+    const onErr = (e) => {
+      if (paneKey) { try { settWritePending(prefix, paneKey, payload[paneKey]); settNoticePending(prefix); } catch (e2) { } }
+      toast("خطأ في الحفظ: " + ((e && e.message) || e) + " — تعديلاتك محفوظة على جهازك ومش هتضيع.", "error");
     };
     if (isOwner) {
       const orgId = $("#setOrgPicker") ? $("#setOrgPicker").value : null;
@@ -7700,10 +8047,11 @@
           if (o) o.org_name = payload.org.name;
           if (window.__admDbl) { /* سيُعاد الجلب عند فتح شاشة الإدارة */ }
         }
-      }).catch((e) => toast("خطأ في الحفظ: " + (e.message || e), "error"));
+      }).catch(onErr);
       return;
     }
-    DATA.saveClientSett(payload).then(after).catch((e) => toast("خطأ في الحفظ: " + (e.message || e), "error"));
+    if (!(A.online && DATA && DATA.saveClientSett)) { onErr("لا يوجد اتصال بالسحابة"); return; }
+    DATA.saveClientSett(payload).then(after).catch(onErr);
   }
 
   // ================== المالك: تبويبات الشركة المحددة ==================
@@ -7758,25 +8106,48 @@
   function loadSettForOrg(orgId) {
     if (!orgId) return;
     DATA.adminSettLoad(orgId).then((p) => {
-      ssetData = p || { org: {}, categories: [], units: [], warehouses: [], owners: [], wallets: [], banks: [] };
+      // 🛡 بناء 124: نفس قاعدة العميل — حمولة ناقصة/null = «ما اتحمّلتش» ⇒ الحفظ ما يرفعش القوائم
+      if (!p || typeof p !== "object") {
+        settMarkFailed("s", "السحابة رجعت حمولة فاضية", orgId);
+        ssetData = null;
+        renderAllSettPanes("s");
+        settNotice("⚠️ تعذّر قراءة إعدادات الشركة من السحابة. القوائم مقفولة للحفظ — اختر الشركة تاني. مافيش حاجة هتتمسح.", "err", "s");
+        return;
+      }
+      ssetData = p;
+      ssetData.__online = true;
+      settMarkLoaded("s", ssetData, orgId);
+      try { settApplyPending("s"); } catch (e) { }
       renderAllSettPanes("s");
+      try { settNoticePending("s"); } catch (e) { }
       const o = ssetOrgs.find((x) => x.org_id === orgId);
       if (o) {
         const t = $("#viewSettings .view-title");
         if (t) t.textContent = "🛡️ إعدادات ونسخ احتياطي المالك — " + (o.org_name || "");
       }
-    }).catch((e) => toast("تعذّر تحميل إعدادات الشركة: " + (e.message || e), "error"));
+    }).catch((e) => {
+      settMarkFailed("s", (e && e.message) || e, orgId);
+      toast("تعذّر تحميل إعدادات الشركة: " + (e.message || e), "error");
+      settNotice("⚠️ تعذّر تحميل إعدادات الشركة: " + ((e && e.message) || e) + ". القوائم مقفولة للحفظ لحد ما تتحمّل. مافيش حاجة هتتمسح.", "err", "s");
+    });
   }
 
   function saveSettingsForm() {
     const orgId = $("#setOrgPicker") ? $("#setOrgPicker").value : null;
     if (!orgId || !ssetData) { toast("اختر الشركة أولًا.", "warning"); return; }
-    const payload = gatherSettPayload("s");
+    // 🛡 بناء 124: نفس قاعدة العميل — القوائم اللي ما اتحمّلتش ما تتبعتش (منع المسح الجماعي)
+    const safe = settSafePayload("s");
+    const payload = safe.payload;
     DATA.adminSettSave(orgId, payload).then(() => {
       addActivity("إعدادات", "تعديل إعدادات شركة (المالك)");
-      toast("تم حفظ تبويبات الشركة بنجاح.", "success");
+      SETT_LIST_KEYS.forEach((k) => { if (Array.isArray(payload[k])) settDropPending("s", k); });
+      toast("تم حفظ تبويبات الشركة بنجاح." + (safe.skipped.length ? " (" + settSkipText(safe.skipped) + ")" : ""), "success");
+      try { settNoticePending("s"); } catch (e) { }
       renderAllSettPanes("s");
-    }).catch((e) => toast("خطأ في الحفظ: " + (e.message || e), "error"));
+    }).catch((e) => {
+      try { SETT_LIST_KEYS.forEach((k) => { if (Array.isArray(payload[k])) settWritePending("s", k, payload[k]); }); settNoticePending("s"); } catch (e2) { }
+      toast("خطأ في الحفظ: " + ((e && e.message) || e) + " — التعديلات محفوظة على الجهاز ومش هتضيع.", "error");
+    });
   }
 
   // رسم كل ألواح التبويبات لجلسة معيّنة (c/s)
@@ -7880,6 +8251,8 @@
   }
 
   // النسخة الاحتياطية الشاملة للمالك (كل العملاء) أو لشركة محددة — حسب اختياره في القائمة
+  // 🆕 بناء 124: بتتبني من mizan_admin_backup_full (٣٦ جدول) بدل export_all/export_one
+  // (١٩ جدول) ⇒ المرتجعات والحضور والأصول الثابتة وأرقام الفواتير بقت داخل الملف
   function backupAllData() {
     if (!DATA) return;
     const sel = document.getElementById("setBackupScope");
@@ -7890,6 +8263,13 @@
     toast("جارٍ تجهيز النسخة الاحتياطية (" + orgName + ")...", "info");
     const run = (prom) => prom.then((pack) => {
       if (!pack) throw new Error("لا توجد بيانات");
+      const cov = backupCoverage(pack, orgId ? ORG_SCOPE : FULL_RESTORE_TABLES);
+      const covTxt = coverageNote(cov);
+      const done = (where) => {
+        addActivity("نسخ احتياطي شامل", "تصدير نسخة احتياطية (" + orgName + ") — " + covTxt);
+        if (cov.missing.length) toast("النسخة اتحفظت " + where + "، بس " + covTxt, "warning");
+        else toast("تم حفظ النسخة الاحتياطية " + where + " — " + covTxt, "success");
+      };
       const jsonStr = JSON.stringify(pack, null, 2);
       const blob = new Blob([jsonStr], { type: "application/json" });
       const name = (orgId ? "mizan-company-backup-" : "mizan-full-backup-") + todayISO() + ".json";
@@ -7908,25 +8288,19 @@
         }).then((handle) => {
           return handle.createWritable().then((w) => w.write(blob).then(() => w.close()));
         }).then(() => {
-          addActivity("نسخ احتياطي شامل", "تصدير نسخة احتياطية (" + orgName + ")");
-          toast("تم حفظ النسخة الاحتياطية في المكان الذي اخترته.", "success");
+          done("في المكان الذي اخترته");
         }).catch((e) => {
           if (e && e.name === "AbortError") return;
-          saveFile(() => {
-            addActivity("نسخ احتياطي شامل", "تصدير نسخة احتياطية (" + orgName + ")");
-            toast("تم حفظ النسخة الاحتياطية في مجلد التنزيلات.", "success");
-          });
+          saveFile(() => done("في مجلد التنزيلات"));
         });
       } else {
-        saveFile(() => {
-          addActivity("نسخ احتياطي شامل", "تصدير نسخة احتياطية (" + orgName + ")");
-          toast("تم حفظ النسخة الاحتياطية في مجلد التنزيلات.", "success");
-        });
+        saveFile(() => done("في مجلد التنزيلات"));
       }
+    }).catch((e) => {
+      const msg = e && e.message ? e.message : String(e);
+      toast("ما كانش ممكن النسخ الاحتياطي: " + (msg.length > 140 ? msg.slice(0, 140) : msg), "error");
     });
-    if (orgId) run(DATA.adminExportOne(orgId));
-    else if (DATA.adminExportAll) run(DATA.adminExportAll());
-    else toast("النسخة الاحتياطية غير متاحة.", "error");
+    run(ownerBackupPack(orgId));
   }
 
   // ============ نسخة النشر الكاملة (كود + سكيما + داتا) — ترحيل ٢٣ ============
@@ -7943,7 +8317,28 @@
     "db/supabase-upgrade-16.sql", "db/supabase-upgrade-17.sql",
     "db/supabase-upgrade-18-role-delete-protection.sql", "db/supabase-upgrade-19-offline-multidevice.sql",
     "db/supabase-upgrade-20-invoice-seq.sql", "db/supabase-upgrade-21-admin-lastseen.sql",
-    "db/supabase-upgrade-22-admin-online.sql", "db/supabase-upgrade-23-full-backup.sql"];
+    "db/supabase-upgrade-22-admin-online.sql", "db/supabase-upgrade-23-full-backup.sql",
+    // 🆕 بناء 124: القائمة كانت واقفة عند الترحيل ٢٣ ⇒ نسخة النشر كانت بتنزل على سيرفر جديد
+    // بلا جداول المرتجعات والحضور والأصول الثابتة. أي ترحيل جديد لازم ينضم هنا
+    // (حارس check_backup_coverage_124.js بيقرأ مجلد db/ ويلزم القائمة بيها).
+    "db/supabase-upgrade-24-subs.sql", "db/supabase-upgrade-25-docs.sql",
+    "db/supabase-upgrade-26-returns.sql", "db/supabase-upgrade-27-supplier-txs-cols.sql",
+    "db/supabase-upgrade-28-tx-time-and-item-indexes.sql", "db/supabase-upgrade-29-item-line-identity.sql",
+    "db/supabase-upgrade-30-invoice-party-links.sql", "db/supabase-upgrade-31-item-line-details.sql",
+    "db/supabase-upgrade-32-backup-returns.sql", "db/supabase-upgrade-33-invoice-fields.sql",
+    "db/supabase-upgrade-34-treasury-identity.sql", "db/supabase-upgrade-35-attendance.sql",
+    "db/supabase-upgrade-36-backup-attendance.sql", "db/supabase-upgrade-37-fixed-assets.sql",
+    "db/supabase-upgrade-38-backup-fixed-assets.sql", "db/supabase-upgrade-39-product-unit.sql",
+    "db/supabase-upgrade-42-owner-always-open.sql",
+    // ترقية ٤٣ (تحصين دوال النسخ) اتنفّذت على السحابة 02/10 ≈12:00 بأمر المالك «نفّذ» ⇒ بقت جزء من نسخة النشر
+    "db/supabase-upgrade-43-backup-hardening.sql",
+    // ترقية 44 (منع الزرع التجريبي في دالة إنشاء الشركة: صندوق رئيسي وحساب رأس مال برصيد صفر فقط)
+    // اتنفّذت على السحابة 02/10 بأمر المالك «نفذ منع الزرع» ⇒ جزء من نسخة النشر (سيرفر جديد = نفس القاعدة)
+    "db/supabase-upgrade-44-no-demo-seed.sql"];
+  // ملفات موجودة في db/ بس مش داخلة في نسخة النشر — كل واحد بسبب مكتوب، والحارس يرفض أي إضافة هنا من غير سبب
+  var DEPLOY_DB_EXCLUDE = {
+    // فاضي من 02/10: كل ترحيلات db/ المنشورة داخلة في نسخة النشر (٤٣ انضمّت بعد تنفيذها)
+  };
   var DEPLOY_DATA_TABLES = ["organizations", "profiles",
     "accounts", "audit_logs", "categories", "customer_txs", "customers",
     "employees", "attendance", "att_settings", "fixed_assets",
@@ -7951,6 +8346,137 @@
     "mizan_pw_store", "owners", "password_changes", "presence", "products",
     "purchase_items", "purchases", "sale_items", "sales", "supplier_txs", "suppliers",
     "treasury", "units", "vouchers", "warehouses"];
+
+  // ============ 🆕 بناء 124: تغطية النسخة الاحتياطية — مصدر واحد للحقيقة ============
+  // الجداول اللي `mizan_admin_restore_full` بيفرّغها على السيرفر (ترقيات ٣٢ و٣٦ و٣٨).
+  // لو ملف النسخة ما فيهوش مفتاح جدول من دول ⇒ بيانات الجدول ده تتمسح وقت الاستعادة،
+  // فبنقري الملف قبل الزرار وبنقول للمالك بالحرف هيتمسح إيه.
+  var FULL_RESTORE_TABLES = ["organizations", "profiles",
+    "accounts", "audit_logs", "categories", "customer_txs", "customers",
+    "journal_entries", "journal_lines", "mizan_created_accounts", "mizan_invoice_seq",
+    "mizan_pw_store", "owners", "password_changes", "presence", "products",
+    "purchase_items", "purchases", "sale_items", "sales", "supplier_txs", "suppliers",
+    "treasury", "units", "vouchers", "warehouses",
+    "sale_returns", "sale_return_items", "purchase_returns", "purchase_return_items",
+    "mizan_documents", "mizan_retired_codes",
+    "employees", "attendance", "att_settings", "fixed_assets"];
+  // الجداول اللي مالهاش عمود org_id (مقيس على القاعدة الحيّة 02/10) — ما بتتقسّمش على شركة
+  var ORG_SCOPED_EXCLUDE = ["organizations", "mizan_pw_store"];
+  // نطاق نسخة «شركة واحدة»: كل الجداول ماعدا الحسابات العامة وكلمات المرور
+  var ORG_SCOPE = FULL_RESTORE_TABLES.filter((t) => ORG_SCOPED_EXCLUDE.indexOf(t) === -1);
+  // الجداول اللي `mizan_admin_restore_one` بيرجّعها فعلًا company-by-company (ترقية ١٢)
+  var RESTORE_ONE_COVERS = ["sale_items", "sales", "purchase_items", "purchases", "supplier_txs",
+    "customer_txs", "vouchers", "journal_lines", "journal_entries", "audit_logs", "treasury",
+    "accounts", "owners", "warehouses", "units", "categories", "customers", "suppliers", "products"];
+
+  // استكمال قائمة الجداول من اللقطة نفسها: أي مفتاح مصفوفة جديد على السيرفر
+  // يدخل database.sql أوتوماتيك — عشان القائمة اليدوية ما سيّبتش تعديلات برّا النسخة (بند ٦)
+  function deployTablesFor(dump) {
+    const base = DEPLOY_DATA_TABLES.slice();
+    const seen = {}; base.forEach((k) => { seen[k] = 1; });
+    if (dump && typeof dump === "object") {
+      Object.keys(dump).sort().forEach((k) => {
+        if (seen[k] || k.charAt(0) === "_" || !Array.isArray(dump[k])) return;
+        base.push(k); seen[k] = 1;
+      });
+    }
+    return base;
+  }
+
+  // مقياس التغطية: كام جدول من المطلوب موجودة فعلاً في النسخة (المطلوب = الشامل أو نطاق شركة)
+  function backupCoverage(dump, required) {
+    const list = required || FULL_RESTORE_TABLES;
+    const missing = !dump ? list.slice() : list.filter((t) => !Array.isArray(dump[t]));
+    let rows = 0;
+    if (dump) Object.keys(dump).forEach((k) => { if (Array.isArray(dump[k])) rows += dump[k].length; });
+    return { total: list.length, covered: list.length - missing.length, missing: missing, rows: rows };
+  }
+  function coverageNote(cov) {
+    if (!cov.missing.length) return "كل الجداول مغطاة: " + cov.covered + "/" + cov.total + " جدول، " + cov.rows + " سطر.";
+    return "النسخة فيها " + cov.covered + "/" + cov.total + " جدول — الناقص: " + cov.missing.join("، ") + ".";
+  }
+
+  // نسخة شركة واحدة مبنية من اللقطة الشاملة (كل الجداول، مش ١٩ بس) — بتقبها
+  // mizan_admin_restore_one لأن شكل organizations مدعوم عنده
+  function sliceDumpForOrg(dump, orgId) {
+    if (!dump || !orgId) return null;
+    const orgs = (dump.organizations || []).filter((o) => o && String(o.id) === String(orgId));
+    if (!orgs.length) return null;
+    const out = { exported_at: new Date().toISOString(), source: "mizan_admin_backup_full", org: orgs[0], organizations: orgs };
+    FULL_RESTORE_TABLES.forEach((t) => {
+      if (ORG_SCOPED_EXCLUDE.indexOf(t) !== -1) return;
+      out[t] = Array.isArray(dump[t]) ? dump[t].filter((r) => r && String(r.org_id) === String(orgId)) : [];
+    });
+    return out;
+  }
+
+  // النسخة الاحتياطية للمالك (للكل أو لشركة) بتتبني دلوقتي من mizan_admin_backup_full
+  // بدل mizan_admin_export_all / export_one القدام (١٩ جدول بس) — بند ٦ بالحرف
+  function ownerBackupPack(orgId) {
+    if (!(A.online && DATA && DATA.adminBackupFull)) return Promise.reject(new Error("النسخة الاحتياطية غير متاحة."));
+    return DATA.adminBackupFull().then((dump) => {
+      if (!dump || !Array.isArray(dump.organizations)) throw new Error("لم تصل بيانات كاملة من السيرفر.");
+      if (!orgId) return dump;
+      const pack = sliceDumpForOrg(dump, orgId);
+      if (!pack) throw new Error("الشركة المطلوبة مش في بيانات السيرفر.");
+      return pack;
+    });
+  }
+
+  // إيه اللي جوّه ملف النسخة قبل ما نستعيد — بالأسطر والجدول الناقصة
+  function restoreBriefing(payload) {
+    const single = !!(payload && payload.org && payload.org.id);
+    const cov = backupCoverage(payload, single ? ORG_SCOPE : FULL_RESTORE_TABLES);
+    const orgs = Array.isArray(payload && payload.organizations) ? payload.organizations.length : 0;
+    const users = Array.isArray(payload && payload._auth_users) ? payload._auth_users.length : 0;
+    const orgName = payload && payload.org && payload.org.name ? payload.org.name : "";
+    const head = orgName ? ("شركة «" + orgName + "»") : (orgs + " شركة، " + users + " حساب دخول");
+    return { orgs: orgs, users: users, orgName: orgName, missing: cov.missing, rows: cov.rows,
+      covered: cov.covered, total: cov.total,
+      text: "المحتوى: " + head + " — " + coverageNote(cov) };
+  }
+
+  // مقارنة أعداد الأسطر: الملف ↔ السيرفر بعد الاستعادة (قراءة فقط)
+  function orgIdOfPayload(payload) {
+    if (!payload) return null;
+    if (payload.org && payload.org.id) return String(payload.org.id);
+    const orgs = Array.isArray(payload.organizations) ? payload.organizations : [];
+    return orgs.length === 1 && orgs[0] && orgs[0].id ? String(orgs[0].id) : null;
+  }
+  function restoreCountDiff(payload, live, orgId) {
+    const diffs = []; let checked = 0;
+    const keys = Object.keys(payload || {}).filter((k) => Array.isArray(payload[k]) && k !== "organizations");
+    keys.forEach((k) => {
+      const want = payload[k].length;
+      if (!live || !Array.isArray(live[k])) { diffs.push({ t: k, want: want, got: null, restorable: true }); return; }
+      const got = orgId ? live[k].filter((r) => r && String(r.org_id) === String(orgId)).length : live[k].length;
+      checked++;
+      if (got === want) return;
+      diffs.push({ t: k, want: want, got: got, restorable: !orgId || RESTORE_ONE_COVERS.indexOf(k) !== -1 });
+    });
+    const mismatch = diffs.filter((d) => d.got !== null);
+    const unavailable = diffs.filter((d) => d.got === null);
+    return { checked: checked, matched: checked - mismatch.length, diffs: mismatch,
+      unavailable: unavailable.length, orgId: orgId || null };
+  }
+  function verifyRestore(payload) {
+    if (!(A.online && DATA && DATA.adminBackupFull)) return Promise.resolve(null);
+    const orgId = orgIdOfPayload(payload);
+    return DATA.adminBackupFull()
+      .then((live) => (live && Array.isArray(live.organizations) ? restoreCountDiff(payload, live, orgId) : null))
+      .catch(() => null);
+  }
+  function restoreVerifyNote(v) {
+    if (!v) return "الاستعادة تمت. ما قدرناش نتحقق تلقائيًا من السيرفر دلوقتي — اتأكد بعد لحظات.";
+    if (!v.diffs.length && !v.unavailable) {
+      return "الاستعادة تمت والتحقق: " + v.matched + "/" + v.checked + " جدول مطابق للأرقام على السيرفر.";
+    }
+    const notYet = v.diffs.filter((d) => !d.restorable);
+    let msg = "الاستعادة تمت. التحقق لقى فرق في " + v.diffs.length + " جدول";
+    if (notYet.length) msg += " (" + notYet.length + " منها السيرفر لسه ما بيرجّعهاش شركة-بشركة)";
+    if (v.unavailable) msg += "، و" + v.unavailable + " جدول ما كانش مقروء وقت التحقق";
+    return msg + ". التفاصيل في سجل النشاط.";
+  }
 
   function deployStamp() {
     const d = new Date(), p = (n) => String(n).padStart(2, "0");
@@ -7998,28 +8524,46 @@
     try { dump = await DATA.adminBackupFull(); }
     catch (e) { toast("خطأ في سحب البيانات: " + (e.message || e), "error"); return; }
     if (!dump || !Array.isArray(dump.organizations)) { toast("لم تصل بيانات كاملة من السيرفر.", "error"); return; }
-    // 1) ملفات البنية (SQL) من نفس الموقع المنشور
-    const schemaParts = [];
+    const cov = backupCoverage(dump);
+    // 1) ملفات البنية (SQL) من نفس الموقع المنشور — أي ملف ناقص يعني النسخة على سيرفر جديد
+    //    هتبقى أنقص من البرنامج نفسه، فبنرفض ونقول السبب بالحرف بدل ما نسكت (بند ٦)
+    const schemaParts = []; const schemaMissing = [];
     for (const p of DEPLOY_DB_FILES) {
       const b = await fetchSiteBlob(p);
       if (b) schemaParts.push("-- ==== " + p + " ====\n" + await b.text());
+      else schemaMissing.push(p);
+    }
+    if (schemaMissing.length) {
+      const names = schemaMissing.slice(0, 3).map((p) => p.split("/").pop()).join("، ") + (schemaMissing.length > 3 ? "…" : "");
+      toast("نسخة النشر موقوفة: " + schemaMissing.length + " ملف بنية مش موجود على الموقع المنشور (" + names +
+        "). انشر النسخة الحالية الأول وبعدين اعمل النسخة.", "error");
+      addActivity("نسخة نشر", "مرفوض: " + schemaMissing.length + " ملف بنية ناقص على الموقع المنشور — " + names);
+      return;
     }
     if (!schemaParts.length) { toast("تعذّر سحب ملفات البنية (db/*.sql) من الموقع — حدّث النسخة المنشورة أولًا.", "error"); return; }
-    // 2) ملفات الموقع (site/)
-    const siteFiles = [];
+    // 2) ملفات الموقع (site/) — نفس المنطق: مافيش ملف يسقط في صمت
+    const siteFiles = []; const siteMissing = [];
     for (const p of DEPLOY_SITE_FILES) {
       const b = await fetchSiteBlob(p);
-      if (b) siteFiles.push({ name: "site/" + p, blob: b });
+      if (b) siteFiles.push({ name: "site/" + p, blob: b }); else siteMissing.push(p);
+    }
+    if (siteMissing.length) {
+      toast("نسخة النشر موقوفة: " + siteMissing.length + " ملف موقع مش موجود على الموقع المنشور (" +
+        siteMissing.slice(0, 3).join("، ") + (siteMissing.length > 3 ? "…" : "") + "). انشر النسخة الحالية الأول.", "error");
+      addActivity("نسخة نشر", "مرفوض: " + siteMissing.length + " ملف موقع ناقص على الموقع المنشور");
+      return;
     }
     if (!siteFiles.length) { toast("تعذّر سحب ملفات الموقع.", "error"); return; }
-    // 3) database.sql = البنية (+ البيانات لو نسخة كاملة)
+    // 3) database.sql = البنية (+ البيانات لو نسخة كاملة) — الجداول بتتكمّل من اللقطة نفسها
+    //    فأي جدول جديد على السيرفر يدخل النسخة أوتوماتيك من غير ماحد ينسى يضيفه
+    const dataTables = deployTablesFor(dump);
     let dbSql = buildDeploySql(dump, includeData) + "\n" + schemaParts.join("\n\n") + "\n";
     if (includeData) {
       dbSql += "\n-- ===== بيانات حسابات الدخول (كلمات المرور مشفرة bcrypt) =====\n" +
         genInserts("auth", "users", dump._auth_users, ["confirmed_at"]) +
         genInserts("auth", "identities", dump._auth_identities, ["email"]) +
         "\n-- ===== بيانات الشركات والباقي (ترتيب آمن للمفاتيح الأجنبية) =====\n";
-      DEPLOY_DATA_TABLES.forEach((t) => { dbSql += genInserts("public", t, dump[t], []); });
+      dataTables.forEach((t) => { dbSql += genInserts("public", t, dump[t], []); });
     } else {
       dbSql += "\n-- نسخة فارغة: لا توجد بيانات شركات ولا حسابات دخول.\n" +
         "-- أول مستخدم يسجّل من البرنامج يبقى صاحب شركته؛ ولتعيين مالك عام للنظام:\n" +
@@ -8033,7 +8577,9 @@
         app: "mizan", build: window.MIZAN_BUILD,
         companies: (dump.organizations || []).length,
         auth_users: (dump._auth_users || []).length,
-        counts: DEPLOY_DATA_TABLES.reduce((a, t) => { a[t] = (dump[t] || []).length; return a; }, {})
+        schema_files: DEPLOY_DB_FILES.length,
+        coverage: { tables: cov.total, covered: cov.covered, missing: cov.missing, rows: cov.rows },
+        counts: dataTables.reduce((a, t) => { a[t] = (dump[t] || []).length; return a; }, {})
       }, null, 2)], { type: "application/json" }) }
     ];
     siteFiles.forEach((f) => files.push(f));
@@ -8041,8 +8587,14 @@
     if (includeData) files.push({ name: "data.json", blob: new Blob([JSON.stringify(dump)], { type: "application/json" }) });
     const baseName = "mizan-deploy-backup-" + (includeData ? "full" : "empty") + "-" + deployStamp();
     saveDeployBundle(files, baseName).then((how) => {
-      addActivity("نسخة نشر", "نسخة " + (includeData ? "كاملة" : "فارغة") + " — " + how);
-      toast("اتحفظت في " + baseName + " (" + files.length + " ملف). شوف README.txt لخطوات التشغيل.", "success");
+      addActivity("نسخة نشر", "نسخة " + (includeData ? "كاملة" : "فارغة") + " — " + how +
+        " — تغطية: " + coverageNote(cov));
+      if (cov.missing.length) {
+        toast("النسخة اتحفظت، بس السيرفر ما رجّعش " + cov.missing.length + " جدول: " +
+          cov.missing.join("، ") + ". اتأكد من نسخة السحابة الأول.", "warning");
+      } else {
+        toast("اتحفظت في " + baseName + " (" + files.length + " ملف) — " + coverageNote(cov), "success");
+      }
     });
   }
 
@@ -8104,6 +8656,8 @@
   //  1) ملف بيور (بلا شركات وبلا حسابات) → ما يلمس السيرفر نهائيًا.
   //  2) ملف كامل + سيرفر فاضي (جديد) → يُنشر مباشرة بلا تحذيرات.
   //  3) ملف كامل + سيرفر فيه بيانات → تأكيد صريح قبل الاستبدال (كتلة واحدة: خطأ = لا يتغير شيء).
+  // 🆕 بناء 124: قبل الاستعادة بنقرأ الملف ونقول هيتمسح إيه (mizan_admin_restore_full
+  // بيفرّغ ٣٦ جدول حتى اللي ملهاش مفتاح في الملف)، وبعدها بنقارن الأعداد على السيرفر.
   function ownerRestoreFullFile(jsonStr) {
     let payload;
     try { payload = JSON.parse(jsonStr); } catch (e) { toast("الملف غير صالح أو تالف.", "warning"); return; }
@@ -8114,20 +8668,35 @@
       toast("النسخة دي «سورس بيور» — مفيهاش بيانات شركات عشان تُنشر، والسيرفر الحالي ما اتلمسش. لتنزيلها على سيرفر جديد اتبع خطوات README اللي جوه المجلد.", "info");
       return;
     }
+    const brief = restoreBriefing(payload);
     const doRestore = (freshServer) => {
       toast(freshServer ? "جارٍ نشر النسخة على السيرفر الجديد..." : "جارٍ الاستعادة الكاملة...", "info");
       DATA.adminRestoreFull(payload).then((msg) => {
         toast(msg || "تم النشر بنجاح.", "success");
-        addActivity("نسخة نشر", "نشر باك أب من الجهاز: " + orgsInFile + " شركة، " + usersInFile + " حساب دخول");
-        setTimeout(() => window.location.reload(), 1800);
+        addActivity("نسخة نشر", "نشر باك أب من الجهاز: " + orgsInFile + " شركة، " + usersInFile +
+          " حساب دخول — " + brief.text);
+        return verifyRestore(payload).then((v) => {
+          const note = restoreVerifyNote(v);
+          addActivity("تحقق الاستعادة", note + (v && v.diffs.length
+            ? " — " + v.diffs.map((d) => d.t + " (الملف " + d.want + " / السيرفر " + (d.got === null ? "غير مقروء" : d.got) + ")").join("، ")
+            : ""));
+          toast(note, v && v.diffs.length ? "warning" : "success");
+          setTimeout(() => window.location.reload(), 2200);
+        });
       }).catch((e) => toast("خطأ في الاستعادة (لم يُمسح شيء): " + (e.message || e), "error"));
     };
     const afterServerCheck = (curOrgs) => {
       if (curOrgs === 0) { doRestore(true); return; }
       const w = confirm("السيرفر الحالي فيه بيانات (" + curOrgs + " شركة عاملة).\n\n" +
-        "النسخة اللي اخترتها فيها " + orgsInFile + " شركة و" + usersInFile + " حساب دخول.\n\n" +
+        brief.text + "\n\n" +
         "نشرها معناه استبدال بيانات السيرفر ببيانات الملف (لو حصل أي خطأ في الوسط لا يُمسح شيء — العملية كتلة واحدة).\n\nهل تريد الاستبدال فعلًا؟");
       if (!w) { toast("تم الإلغاء — لم يتغير أي شيء على السيرفر.", "info"); return; }
+      if (brief.missing.length) {
+        const hard = confirm("⚠️ الملف ده نسخة قديمة أو ناقصة: ما فيهوش " + brief.missing.length +
+          " جدول (" + brief.missing.join("، ") + ").\n\nالسيرفر بيفرّغ كل الجداول قبل ما يزرع اللي في الملف،" +
+          " فبيانات الجداول دي هتتمسح وما ترجعش.\n\nهل أنت متأكد إنك عايز تكمّل برضه؟");
+        if (!hard) { toast("تم الإلغاء — لم يتغير أي شيء على السيرفر.", "info"); return; }
+      }
       doRestore(false);
     };
     if (A.online && DATA && DATA.adminOrgs) {
@@ -8136,11 +8705,24 @@
     } else afterServerCheck(1);
   }
 
+  // الجداول اللي فيها بيانات في الملف والسيرفر ما بيرجّعهاش company-by-company دلوقتي
+  function restoreOneLimitNote(payload) {
+    if (!payload) return "";
+    const beyond = FULL_RESTORE_TABLES.filter((t) =>
+      RESTORE_ONE_COVERS.indexOf(t) === -1 && t !== "organizations" && t !== "profiles" &&
+      Array.isArray(payload[t]) && payload[t].length > 0);
+    if (!beyond.length) return "";
+    return "\n\nتنبيه: استعادة شركة-بشركة على السيرفر الحالي بترجّع ١٩ جدول بس. اللي موجود في الملف ومش هيرجع بالطريقة دي: " +
+      beyond.join("، ") + " — عشان ترجّع دول company-by-company لازم ترقية على السيرفر توسّع استعادة الشركة (أمر بيجهّزها)، " +
+      "أو استخدم «♻️ استعادة نسخة نشر كاملة» فهي بتشمل كل الجداول.";
+  }
+
   // استعادة نسخة للمالك: يختار الشركة أولًا (أو الكل) من القائمة، بتحذير فقط — بدون باسورد
   function ownerRestoreFile(jsonStr) {
     let payload;
     try { payload = JSON.parse(jsonStr); } catch (e) { toast("الملف غير صالح أو تالف.", "warning"); return; }
     if (!payload || typeof payload !== "object") { toast("ملف النسخة غير صحيح.", "warning"); return; }
+    const brief = restoreBriefing(payload);
     const sel = document.getElementById("setRestoreScope");
     // لو الملف نسخة شركة واحدة (يحتوي org) نستعيد الشركة مباشرة بمعرّفها من الملف نفسه
     // — فيعمل حتى لو كانت الشركة محذوفة من السحابة (تُعاد إنشاؤها بكل بياناتها)
@@ -8150,29 +8732,44 @@
       ? (payload.org.name || "شركة محذوفة") + " (من الملف)"
       : (sel && sel.selectedOptions.length ? sel.selectedOptions[0].textContent.trim() : "الكل (كل العملاء)");
     if (singleOrgId) {
-      const again = confirm("أعد استعادة شركة «" + scopeName + "»؟\nستُعاد كل بياناتها المخزنة من الملف إلى السحابة (نفس الشركة — تُنشأ مجددًا إن كانت محذوفة).\nملاحظة: حسابات أعضاء الشركة لا تُستعاد من الملف — ستعيد إنشاء حساب دخولها من شاشة الإدارة بعد الاستعادة.\nهل أنت متأكد؟");
+      const again = confirm("أعد استعادة شركة «" + scopeName + "»؟\n" + brief.text +
+        "\nستُعاد بياناتها المخزنة من الملف إلى السحابة (نفس الشركة — تُنشأ مجددًا إن كانت محذوفة)." +
+        "\nملاحظة: حسابات أعضاء الشركة لا تُستعاد من الملف — ستعيد إنشاء حساب دخولها من شاشة الإدارة بعد الاستعادة." +
+        restoreOneLimitNote(payload) +
+        "\n\nهل أنت متأكد؟");
       if (!again) { toast("تم إلغاء الاستعادة.", "info"); return; }
       if (!DATA) { toast("وضع السحابة غير متاح.", "error"); return; }
       toast("جارٍ استعادة الشركة من الملف...", "info");
       DATA.adminRestoreOne(singleOrgId, payload).then(() => {
-        addActivity("نسخ احتياطي شامل", "استعادة شركة واحدة من الملف (" + scopeName + ")");
+        addActivity("نسخ احتياطي شامل", "استعادة شركة واحدة من الملف (" + scopeName + ") — " + brief.text);
         toast("تمت استعادة الشركة بنجاح.", "success");
-        setTimeout(() => window.location.reload(), 1600);
+        return verifyRestore(payload).then((v) => {
+          const note = restoreVerifyNote(v);
+          addActivity("تحقق الاستعادة", note);
+          if (v && v.diffs.length) toast(note, "warning");
+          setTimeout(() => window.location.reload(), 2200);
+        });
       }).catch((e) => {
         const msg = e && e.message ? e.message : String(e);
         toast("خطأ في الاستعادة: " + (msg.length > 140 ? msg.slice(0, 140) : msg), "error");
       });
       return;
     }
-    const w = confirm("تحذير شديد ⚠️⚠️⚠️\n\nستُستبدل بيانات: «" + scopeName + "»\nببيانات هذا الملف نهائيًا. لا يمكن التراجع.\n\nهل أنت متأكد تمامًا؟");
+    const w = confirm("تحذير شديد ⚠️⚠️⚠️\n\nستُستبدل بيانات: «" + scopeName + "»\nببيانات هذا الملف نهائيًا. لا يمكن التراجع.\n\n" +
+      brief.text + restoreOneLimitNote(payload) + "\n\nهل أنت متأكد تمامًا؟");
     if (!w) { toast("تم إلغاء الاستعادة.", "info"); return; }
     if (!DATA) { toast("وضع السحابة غير متاح.", "error"); return; }
     toast("جارٍ استعادة النسخة...", "info");
     const prom = orgId ? DATA.adminRestoreOne(orgId, payload) : DATA.adminRestoreAll(payload);
     prom.then(() => {
       toast("تمت الاستعادة بنجاح.", "success");
-      addActivity("نسخ احتياطي شامل", "استعادة نسخة (" + scopeName + ")");
-      setTimeout(() => window.location.reload(), 1600);
+      addActivity("نسخ احتياطي شامل", "استعادة نسخة (" + scopeName + ") — " + brief.text);
+      return verifyRestore(payload).then((v) => {
+        const note = restoreVerifyNote(v);
+        addActivity("تحقق الاستعادة", note);
+        if (v && v.diffs.length) toast(note, "warning");
+        setTimeout(() => window.location.reload(), 2200);
+      });
     }).catch((e) => {
       const msg = e && e.message ? e.message : String(e);
       toast("خطأ في الاستعادة: " + (msg.length > 140 ? msg.slice(0, 140) : msg), "error");
@@ -8783,7 +9380,18 @@
         const type = btn.getAttribute("data-" + prefix + action) || "cat";
         btn.addEventListener("click", () => {
           const list = settList(prefix, type);
-          if (action === "ref") renderSettGrid(prefix, type);
+          // 🛡 بناء 124: «🔄 تحديث» = إعادة تحميل من السحابة فعلًا (كان رسم محلي بس) —
+          // ده الزرار اللي بنوجّه المستخدم ليه لما التحميل يفشل والحفظ يتقفل.
+          if (action === "ref") {
+            renderSettGrid(prefix, type);
+            try {
+              if (prefix === "c") loadClientSettingsForm();
+              else {
+                const oid = $("#setOrgPicker") ? $("#setOrgPicker").value : null;
+                if (oid) loadSettForOrg(oid);
+              }
+            } catch (e) { }
+          }
           else if (action === "add") settOpenEditor(prefix, type, null);
           else if (action === "edit") {
             if (!list.length) { toast("لا توجد بيانات للتعديل.", "info"); return; }
@@ -8796,7 +9404,8 @@
             const p = settPayload(prefix);
             p[SETT_TYPES[type].key] = list;
             renderSettGrid(prefix, type);
-            toast("تم الحذف محليًا. اضغط «حفظ جميع تبويبات» لحفظه.", "info");
+            // 🛡 بناء 124: الحذف من الشريط كمان يتخزن على الجهاز ويترفع فورًا
+            settAutosave(prefix, type, { force: true });
           }
         });
       });
@@ -10909,8 +11518,13 @@ const pwEye = document.getElementById("btnShowPass");
         dlg.remove();
         if (!confirm("حذف شركة «" + name + "» نهائيًا بكل بياناتها المخزنة (عملاء، مبيعات، حسابات...)?\nسيتم أولًا حفظ نسخة احتياطية كاملة على جهازك لتستعيدها في أي وقت.\nملاحظة: الملف يحفظ بيانات الشركة (وليس حسابات أعضائها) — لو رجّعتها لاحقًا ستعيد إنشاء حساب الدخول من الإدارة.\nلا يمكن التراجع عن الحذف من السحابة.")) return;
         toast("جارٍ تجهيز النسخة الاحتياطية قبل الحذف...", "info");
-        DATA.adminExportOne(orgId).then((pack) => {
+        // 🆕 بناء 124: نسخة ما قبل الحذف بتتبني من اللقطة الشاملة (٣٦ جدول)، ولو أي
+        // جدول ناقص فيها الحذف بيترفض — مامنعش شركة تتحذف بسبب نسخة احتياطية أنقص منها
+        ownerBackupPack(orgId).then((pack) => {
           if (!pack) throw new Error("لا توجد بيانات قابلة للنسخ الاحتياطي");
+          const cov = backupCoverage(pack, ORG_SCOPE);
+          if (cov.missing.length) throw new Error("النسخة الاحتياطية ما شملتش: " + cov.missing.join("، ") + " — الحذف مرفوض");
+          const covTxt = coverageNote(cov);
           const jsonStr = JSON.stringify(pack, null, 2);
           const blob = new Blob([jsonStr], { type: "application/json" });
           const safeName = (name || "شركة").replace(/[\\/:*?"<>|]/g, "_").trim() || "شركة";
@@ -10924,7 +11538,7 @@ const pwEye = document.getElementById("btnShowPass");
             resolve(true);
           };
           const finishSave = () => (DATA.adminDeleteOrg(orgId, "full")
-            .then(() => { toast("تم حفظ النسخة الاحتياطية على جهازك، وحُذفت الشركة نهائيًا من السحابة.", "ok"); })
+            .then(() => { toast("تم حفظ النسخة الاحتياطية على جهازك — " + coverageNote(backupCoverage(pack, ORG_SCOPE)) + " — وحُذفت الشركة نهائيًا من السحابة.", "ok"); })
             .catch((e) => { toast("خُزّنت النسخة الاحتياطية، لكن تعذّر حذف الشركة: " + (e.message || e), "error"); })
             .then(() => renderAdminOrgs()));
           if (window.showSaveFilePicker) {
@@ -11461,12 +12075,48 @@ const pwEye = document.getElementById("btnShowPass");
     d.setDate(d.getDate() - 1);
     return subsIso(d);
   }
+  function subsAddDays(iso, n) {
+    const d = new Date(iso + "T00:00:00");
+    d.setDate(d.getDate() + n);
+    return subsIso(d);
+  }
+  function subsDaysBetween(aIso, bIso) {
+    const a = new Date(aIso + "T00:00:00"), b = new Date(bIso + "T00:00:00");
+    return Math.round((b - a) / 86400000);
+  }
+  // ===== إصلاح 02/10 (بند 18): «التجديد» لازم يمدّ لقدام =====
+  // الغلط القديم: الصف كان بيتعبّى من التواريخ المحفوظة (plan_start/plan_end) والزرار كان بيرجّع
+  // نفس التواريخ حرفيًا ⇒ «مش بيغير تاريخ بداية و نهاية الاشتراك و مش بيجدد».
+  // القاعدة الجديدة: لو لسه في مدة باقية نكمّل من بعدها بيوم (ماتخسرش يوم)،
+  // ولو الفترة خلصت (أو مافيش) نبدأ من النهاردة.
+  function subsStoredEnd(o) { return String((o && o.plan_end) || "").slice(0, 10); }
+  function subsStoredStart(o) { return String((o && o.plan_start) || "").slice(0, 10); }
+  function subsRenewStart(o) {
+    const was = subsStoredEnd(o);
+    const today = subsToday();
+    if (was && was >= today) return subsAddDays(was, 1);
+    return today;
+  }
+  // مصدر واحد للسطر التوضيحي تحت تاريخ البداية (الشاشة والرسم اللحظي بيقروا من نفس الدالة)
+  function subsStartHint(start, storedEnd) {
+    const today = subsToday();
+    if (!start) return "حدّد تاريخ البداية";
+    if (storedEnd && start === subsAddDays(storedEnd, 1)) return "مكمّل من نهاية الفترة المحفوظة — ماتخسرش يوم";
+    if (!storedEnd) return "يبدأ من التاريخ ده (مافيش فترة محفوظة)";
+    if (storedEnd < today && start === today) return "الفترة السابقة انتهت — بيبدأ من النهاردة";
+    if (start > storedEnd) return "بيبدأ بعد نهاية الفترة المحفوظة (فراغ " + subsDaysBetween(storedEnd, start) + " يوم)";
+    return "بيرجّع البداية لقبل نهاية الفترة المحفوظة (هتقل " + subsDaysBetween(start, storedEnd) + " يوم)";
+  }
   function subsInferPlan(o) {
     const P = SUB_PLANS();
     // 1) الخطة المحفوظة باسمها على الشركة أولًا
     if (o.plan) {
       const k = Object.keys(P).find((kk) => P[kk].label === o.plan);
       if (k) return k;
+      // 1ب) الأسماء القديمة/الإنجليزيت اللي اتحفظت قبل ما تبقى عربي (free = تجربة)
+      const ALIAS = { free: "f", trial: "f", monthly: "m", half: "h", halfyearly: "h", semi: "h", semiannual: "h", yearly: "y", annual: "y" };
+      const ak = ALIAS[String(o.plan).trim().toLowerCase()];
+      if (ak) return ak;
     }
     // 2) ثم استنتاج من مدة التواريخ الموجودة
     if (!o.plan_start || !o.plan_end) return "y";
@@ -11543,15 +12193,18 @@ const pwEye = document.getElementById("btnShowPass");
       const orgs = res[1];
       const P = SUB_PLANS();
       if (!orgs || !orgs.length) { lst.innerHTML = '<p class="login-sub">لا توجد شركات بعد.</p>'; return; }
-      let h = '<table class="data-table"><thead><tr><th>الشركة</th><th>الخطة</th><th>من تاريخ</th><th>إلى تاريخ</th><th>السعر المتفق عليه (ج.م)</th><th>الانتهاء الحالي</th><th>تفعيل</th></tr></thead><tbody>';
+      let h = '<table class="data-table"><thead><tr><th>الشركة</th><th>الخطة</th><th>من تاريخ (الجديد)</th><th>إلى تاريخ (الجديد)</th><th>السعر المتفق عليه (ج.م)</th><th>المحفوظ حاليًا</th><th>تفعيل / تجديد</th></tr></thead><tbody>';
       orgs.forEach((o) => {
         const oid = o.org_id;
-        // يسمع بالتاريخ الموجود في شاشة الشركة: البداية من plan_start، والنهاية من plan_end (لو موجودة)
-        const start = String(o.plan_start || "").slice(0, 10) || subsToday();
-        const end = String(o.plan_end || "").slice(0, 10);
+        // الإصلاح: «من/إلى» = فترة التجديد الجديدة (مش منسوخة من المحفوظ)
         const pk = subsInferPlan(o);
+        const start = subsRenewStart(o);
+        const end = subsEnd(start, P[pk].months);
         const price = (o.sub_price != null && o.sub_price !== "") ? Number(o.sub_price) : P[pk].price;
-        h += '<tr data-subs="' + oid + '" data-locked="' + (o.locked ? 1 : 0) + '">' +
+        const wasTxt = subsStoredEnd(o)
+          ? (subsStoredStart(o) ? fmtDate(subsStoredStart(o)) + " ← " : "") + fmtDate(subsStoredEnd(o))
+          : (subsStoredStart(o) ? "من " + fmtDate(subsStoredStart(o)) + " (من غير نهاية)" : "لا يوجد");
+        h += '<tr data-subs="' + oid + '" data-locked="' + (o.locked ? 1 : 0) + '" data-stored-end="' + subsStoredEnd(o) + '">' +
           '<td><b>' + (o.org_name || "بدون اسم") + '</b></td>' +
           '<td><select class="inp subs-plan">' +
             '<option value="f">🎁 تجربة مجانية</option>' +
@@ -11559,14 +12212,15 @@ const pwEye = document.getElementById("btnShowPass");
             '<option value="h">نصف سنوي</option>' +
             '<option value="y">سنوي</option>' +
           '</select></td>' +
-          '<td><input type="date" class="inp subs-start" value="' + start + '"></td>' +
-          '<td><input type="date" class="inp subs-end" value="' + (end || subsEnd(start, P[pk].months)) + '"></td>' +
+          '<td><input type="date" class="inp subs-start" value="' + start + '">' +
+            '<div class="login-sub subs-note">' + subsStartHint(start, subsStoredEnd(o)) + '</div></td>' +
+          '<td><input type="date" class="inp subs-end" value="' + end + '"></td>' +
           '<td><input type="number" min="0" class="inp subs-price" value="' + price + '" style="width:110px;text-align:center"></td>' +
-          '<td>' + (o.plan_end ? fmtDate(o.plan_end) : "—") + (o.locked ? ' <span class="badge-no">🔴 مقفلة</span>' : "") + '</td>' +
-          '<td><button class="btn small green" type="button">✅ تفعيل/تجديد</button></td>' +
+          '<td>' + wasTxt + (o.locked ? ' <span class="badge-no">🔴 مقفلة</span>' : "") + '</td>' +
+          '<td><button class="btn small green subs-go" type="button">✅ تفعيل</button></td>' +
           '</tr>';
       });
-      h += '</tbody></table><p class="login-sub" style="margin-top:8px">💡 التاريخ معروض زي ما هو في «بيانات الشركة» — غير الخطة أو البداية يتعاد حساب النهاية، والسعر يدوي لكل شركة حسب الاتفاق. والتجديد بيفكّ قفل الشركة أوتوماتيك.</p>';
+      h += '</tbody></table><p class="login-sub" style="margin-top:8px">💡 «من/إلى» دي <b>فترة التجديد الجديدة</b>: لو الشركة لسه جواها مدة باقية بيكمّل من بعدها بيوم (ماتخسرش يوم)، ولو الفترة انتهت بيبدأ من النهاردة. غيّر الخطة أو تاريخ البداية تتعاد حساب النهاية، والسعر يدوي لكل شركة حسب الاتفاق — والتجديد بيفكّ قفل الشركة أوتوماتيك.</p>';
       lst.innerHTML = h;
       orgs.forEach((o) => {
         const tr = lst.querySelector('[data-subs="' + o.org_id + '"]');
@@ -11574,7 +12228,9 @@ const pwEye = document.getElementById("btnShowPass");
         tr.querySelector(".subs-plan").value = subsInferPlan(o);
         tr.querySelector(".subs-plan").addEventListener("change", () => subsCalc(tr, true));
         tr.querySelector(".subs-start").addEventListener("change", () => subsCalc(tr, false));
-        tr.querySelector("button").addEventListener("click", () => subsApply(o, tr));
+        tr.querySelector(".subs-end").addEventListener("change", () => subsPaintAction(tr));
+        tr.querySelector(".subs-go").addEventListener("click", () => subsApply(o, tr));
+        subsPaintAction(tr);
       });
       box.scrollIntoView({ behavior: "smooth", block: "start" });
     }).catch((e) => {
@@ -11587,6 +12243,24 @@ const pwEye = document.getElementById("btnShowPass");
     const start = tr.querySelector(".subs-start").value || subsToday();
     tr.querySelector(".subs-end").value = subsEnd(start, p.months);
     if (refreshPrice) tr.querySelector(".subs-price").value = p.price;
+    subsPaintAction(tr);
+  }
+  // يوضّح للمالك قبل الضغط الزرار نفسه هيعمل إيه (تفعيل ولا تجديد) وكم يوم هتزود
+  function subsPaintAction(tr) {
+    const P = SUB_PLANS();
+    const k = tr.querySelector(".subs-plan").value;
+    const p = P[k] || P.y;
+    const b = tr.querySelector(".subs-go");
+    const note = tr.querySelector(".subs-note");
+    if (!b) return;
+    const start = tr.querySelector(".subs-start").value || "";
+    const end = tr.querySelector(".subs-end").value || "";
+    const bad = !start || !end || end < start;
+    b.textContent = bad ? "⚠ راجع التواريخ" : ((tr.dataset.storedEnd ? "✅ تجديد " : "✅ تفعيل ") + p.label);
+    b.disabled = bad;
+    if (note) note.textContent = bad
+      ? "تاريخ النهاية لازم يكون بعد تاريخ البداية"
+      : ("مدّة " + subsDaysBetween(start, end) + " يوم — " + subsStartHint(start, tr.dataset.storedEnd || ""));
   }
   function subsApply(o, tr) {
     const P = SUB_PLANS();
@@ -11595,14 +12269,22 @@ const pwEye = document.getElementById("btnShowPass");
     const end = tr.querySelector(".subs-end").value;
     const price = Number(tr.querySelector(".subs-price").value) || 0;
     if (!start || !end) { toast("حدّد تاريخ البداية الأول", "error"); return; }
-    const msg = "تأكيد تفعيل اشتراك «" + p.label + "» لشركة " + (o.org_name || "بدون اسم") +
-      "\nمن " + start + " إلى " + end +
+    if (end < start) { toast("تاريخ النهاية لازم يكون بعد تاريخ البداية", "error"); return; }
+    const wasEnd = subsStoredEnd(o);
+    const verb = wasEnd ? "تجديد" : "تفعيل";
+    const gain = wasEnd ? subsDaysBetween(wasEnd, end) : subsDaysBetween(start, end);
+    const gainTxt = gain > 0 ? ("(+" + gain + " يوم عن المحفوظ)")
+      : gain < 0 ? ("(" + gain + " يوم — الفترة هتقلّ!)")
+      : "(نفس الفترة المحفوظة — مافيش تمداد)";
+    const msg = "تأكيد " + verb + " اشتراك «" + p.label + "» لشركة " + (o.org_name || "بدون اسم") +
+      "\nالمحفوظ: " + (wasEnd ? (subsStoredStart(o) ? fmtDate(subsStoredStart(o)) + " ← " : "") + fmtDate(wasEnd) : "لا يوجد") +
+      "\nالجديد: من " + start + " إلى " + end + " " + gainTxt +
       "\nالسعر المتفق عليه: " + price.toLocaleString("en") + " ج.م" +
-      (o.locked ? "\n(الشركة مقفلة حاليًا — هيتم فتحها مع التجديد)" : "");
+      (o.locked ? "\n(الشركة مقفلة حاليًا — هيتم فتحها مع " + verb + ")" : "");
     if (!confirm(msg)) return;
     DATA.adminSetSub(o.org_id, start, end, p.label, price, !!o.locked).then(() => {
-      toast("تم تفعيل «" + p.label + "» إلى " + end + " — " + price.toLocaleString("en") + " ج.م", "ok");
-      addActivity("تجديد اشتراك", "تفعيل " + p.label + " لشركة " + (o.org_name || "") + " من " + start + " إلى " + end + " بمبلغ " + price + " ج.م");
+      toast("تم " + verb + " «" + p.label + "» من " + start + " إلى " + end + " — " + price.toLocaleString("en") + " ج.م", "ok");
+      addActivity("تجديد اشتراك", verb + " " + p.label + " لشركة " + (o.org_name || "") + " من " + start + " إلى " + end + " بمبلغ " + price + " ج.م");
       toggleAdminSubs(); toggleAdminSubs();
       renderAdminOrgs();
     }).catch((e) => toast("خطأ: " + (e.message || e), "error"));
