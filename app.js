@@ -2883,6 +2883,273 @@
     return products.find((p) => p.id !== exceptId && bcDigits(p.barcode) === b) || null;
   }
 
+  /* ══════════════════════════════════════════════════════════════════════════════
+     بناء 143 — المسح الضوئي لباركود الصنف (فاتورة البيع + فاتورة الشراء + إدخال الصنف)
+     طلب المالك (③ من خطته + تعديله الحرفي 05/10): «الإسكانر يقرأ ⇒ يتعرّف على الصنف
+     ويختاره والمالك يكتب الكمية»، و«ممكن اكتب صنف عادى يدوى، ممكن ميكونش له باركود أو
+     ممكن يكون البائع ليس لديه ماكينة قراءة الباركود».
+     ⇒ المسح **طريقة زيادة مش بديلة**: الكتابة اليدوية بالاسم أو الكود سايبة زي ما هي تمامًا.
+
+     كل الإسكانرات (1D ليزر و2D بيقرا حتى المربع QR) بتشتغل keyboard wedge: بتـ«تكتب»
+     النص اللي جوه الكود حرف بحرف وبعدين تدوس Enter. فالمطلوب من عندنا اتنين:
+       (١) **نضّف** النص (CR/LF/TAB + أرقام عربية) — `scanClean`
+       (٢) **نميّز** الإسكانر عن الصابع البشري — `scanKey` مع كل حرف + `scanIsBurst` عند Enter
+           — عشان نعرف هل Enter ده «إنهاء مسح» (نختار الصنف ونقفل على خانة الكمية) ولا
+           «إنهاء كتابة» (السلوك القديم: يضيف السطر على طول).
+     مطابقة المسح **حرفية** (باركود ⇐ كود)، ومع تسامح الأصفار اللي على الشمال بس
+     (UPC-12 = EAN-13 بنفس الرقم). ممنوع المطابقة الجزئية في الأرقام: «1234» لو
+     دخلت على findProductFlexible كانت هتجيب أي صنف بيحتويها ⇒ سطر غلط على الفاتورة.
+     ══════════════════════════════════════════════════════════════════════════════ */
+
+  // الإسكانر بيرمي الرقم + CR/LF؛ bcDigits بتشيل المسافات والعربي، وعلامات التحكم هنا.
+  function scanClean(raw) {
+    return bcDigits(raw).replace(/[\u0000-\u001F\u007F\u00A0]/g, "");
+  }
+
+  /* الإسكانر بيخلص سلسلة حروفه في أقل من ~50ms/حرف، والصابع البشري فوق 150ms دايمًا.
+     90ms = حدود أمان في نص الطريق (الاتنين بيوصلوا لنفس السطر في الآخر، الفرق Enter زيادة). */
+  const SCAN_MAX_GAP_MS = 90;
+  const SCAN_MIN_LEN = 4;
+  const SCAN_BURST_CHARS = 3;
+  const scanTrace = {};
+  /* ⚠️ تُنادى مع **كل حرف** يدخل الخانة (من مستمع `input`)، مش عند Enter.
+     لو نناديها عند Enter بس ⇒ السلسلة ما تتقاسش خالص (streak يفضل 1) والإسكانر
+     يتعامل معاملة الصابع. الدالة دي بتكتب الطابع الزمني وبتعدّ السلسلة. */
+  function scanKey(fieldId) {
+    const now = Date.now();
+    const t = scanTrace[fieldId];
+    const gap = t ? now - t.last : 0;
+    scanTrace[fieldId] = { last: now, streak: t && gap >= 0 && gap <= SCAN_MAX_GAP_MS ? t.streak + 1 : 1 };
+  }
+  // بتقرأ السلسلة بس — ممنوع تكتب حاجة (الكتابة شغل scanKey)
+  function scanIsBurst(fieldId, len) {
+    const t = scanTrace[fieldId];
+    return len >= SCAN_MIN_LEN && !!t && t.streak >= SCAN_BURST_CHARS;
+  }
+  /*الثالث اللي بيقدر يكتب في `scanTrace`: **طمس** الطابع (مش مسح). السبب الحقيقي:
+     الطابع بيفضل في الخانة بعد أي مسح، فالفعل التالي لو بشري (لصق اسم بدل رقم، أو الدوس
+     على رقم من الاقتراح) كان بيسرق المسار القديم بقرار من مسح **قديم**. كل استعمال ليها
+     بيجي في لحظة بشرية مؤكدة ⇒ المسار يرجع للصابع، والكمية تبقى 1 زي الأول. */
+  function scanTraceClear(fieldId) {
+    scanTrace[fieldId] = { last: 0, streak: 0 };
+  }
+
+  /* ══ زنة «مسدس الباركود» (طلب المالك 05/10 ≈18:05: «يظهر صوت الماكينة المسدس عند تعرفه على الصنف») ══
+     النغمة بتتولّد في المتصفح نفسه (`AudioContext` + oscillator) ⇒ **مافيش ملف صوت ولا أي طلب
+     إنترنت**. وبتتنادى **بعد** قرار التعريف مش قبله ⇒ الصمت معناه مافيش صنف اتعرف.
+     أي زعلة من المتصفح (موبايل قبل أول لمسة، أو مافيش `AudioContext`) بتبلع نفسها في صمت:
+     **ممنوع أي خطأ يقطع المسح أو يطلّع أي حاجة للعميل.** */
+  const SCAN_BEEP_OK = [[2100, 55, 0], [2550, 60, 80]];   // صنف موجود اتعرف وضاف = بيب ضغيين (زي الماكينة)
+  const SCAN_BEEP_NEW = [[1850, 110, 0]];                  // رقم جديد بيتسجّل صنف = بيب واحد حاد
+  const SCAN_BEEP_NO = [[190, 150, 0]];                    // مرفوض (موقوف/مكرر/ملوش صنف/كمية ناقصة) = طنين واطي
+  let scanAudio = null;
+  function scanTone(freq, durMs, delayMs, peak) {
+    const ctx = scanAudio;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    const t = ctx.currentTime + delayMs / 1000;
+    osc.type = "square";
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(peak, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + durMs / 1000);
+    osc.connect(g);
+    g.connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + durMs / 1000 + 0.02);
+  }
+  function scanBeep(kind) {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!scanAudio) scanAudio = new AC();
+      if (scanAudio.state === "suspended" && scanAudio.resume) scanAudio.resume().catch(() => {});
+      const notes = kind === "no" ? SCAN_BEEP_NO : kind === "new" ? SCAN_BEEP_NEW : SCAN_BEEP_OK;
+      const peak = kind === "no" ? 0.05 : 0.07;
+      notes.forEach((n) => scanTone(n[0], n[1], n[2], peak));
+    } catch (e) { /* المتصفح رفض الصوت — الشغل كله بيتم من غير زعلة */ }
+  }
+
+  /* ══ إسكانرات بت**تلصق** (paste) بدل ما تكتب حرفًا حرفًا ══
+     فئة حقيقية من الماكينات (وبالذات تطبيقات المسح على الموبايل) بتسلّم الرقم دفعة واحدة
+     في الحافظة. الطلب: «يتعرف على اي نوع سكان» ⇒ بنختم نفس ختم السلسلة وبعدها نكمّل
+     **نفس** مسار Enter (مافيش طريق تاني للإضافة). `paste` بيسبق تحديث القيمة ⇒ `setTimeout(0)`.
+     ⚠️ دي **التانية** اللي بتكتب في `scanTrace` (الأولى `scanKey` — و`scanIsBurst` قارئة بس،
+     والثالثة `scanTraceClear` بتطمس)، وبتكتب **بس** لو اللي اتلصق بيبدو رقم صنف
+     (`scanLooksCode`) ⇒ لصق اسم عربي بيرجع للمسار اليدوي القديم حرفيًا، وما بيختارش صنف
+     ومن ما بيضيفش سطر. */
+  function scanLooksCode(s) {
+    if (s.length < SCAN_MIN_LEN) return false;
+    return /^[0-9A-Za-z][0-9A-Za-z.\-_]*$/.test(s) && /[0-9]/.test(s);
+  }
+  function scanPasteRun(fieldId, then) {
+    setTimeout(() => {
+      const v = scanClean($("#" + fieldId).value);
+      if (scanLooksCode(v)) {
+        scanTrace[fieldId] = { last: Date.now(), streak: Math.max(SCAN_BURST_CHARS, v.length) };
+      } else {
+        // اللي اتلصق اسم (مش رقم صنف) ⇒ فعل بشري ⇒ نطمس أي طابع مسح قديم ونمشي المسار القديم
+        scanTraceClear(fieldId);
+      }
+      then();
+    }, 0);
+  }
+
+  /* «لو الكود فيه مسافة يبقى باركود منتج، ولو من غير مسافة يكون كود الصنف» (طلب 05/10 ≈18:05).
+     المسافة جوه الرقم بتيجي من الإسكانرات اللي بتنقّ الباركود لمجموعات (6221 0863 0001 2)،
+     و**كودات ميزان مالهاش مسافة خالص** ⇒ المسافة علامة موثوقة إن الرقم ده باركود مصنع ⇒
+     المطابقة بتبقى على عمود `barcode` **حصريًا** (لا خانة «الكود»، ولا البحث بالاسم).
+     ⚠️ المسح بيتقاس على `raw` قبل `scanClean` (هي اللي بتشيل المسافات). */
+  function scanHadSpace(raw) {
+    return /[ \t\u00A0]/.test(String(raw == null ? "" : raw));
+  }
+
+  // حدود الإكمال اليدوي: من رقمين (ولا الشاشة تبقى ضجيج) لسقف ٦ أرقام في الرسالة
+  const SCAN_SUGGEST_MIN = 2;
+  const SCAN_SUGGEST_MAX = 6;
+
+  // كل مطابقات الرقم الممسوح، مرتّبة بالدقة: 1 باركود · 2 كود · 3/4 بنفس الرقم بلا أصفار
+  // `bcOnly=true` (رقم فيه مسافة ⇒ باركود مصنع) ⇒ الطبقتين 2 و 4 بتتشالوا: كود الصنف
+  // مالوش مسافة خالص، فممنوع رقم باركود يطيح على كود صنف تاني بالصدفة.
+  function scanMatches(s, bcOnly) {
+    const out = [];
+    if (!s) return out;
+    const up = s.toUpperCase();
+    const bare = up.replace(/^0+/, "");
+    products.forEach((p) => {
+      const b = bcDigits(p.barcode).toUpperCase();
+      const c = String(p.code == null ? "" : p.code).trim().toUpperCase();
+      if (b && b === up) { out.push({ p: p, tier: 1 }); return; }
+      if (!bcOnly && c && c === up) { out.push({ p: p, tier: 2 }); return; }
+      // الأصفار على الشمال بتترفع من **الجهتين** (UPC-12 و EAN-13 رقم واحد):
+      // «012345678905» المخزّن و«12345678905» الممسوح — أو العكس. كل صنف بيرجع مرة
+      // واحدة بس (الـ return فوق)، فمافيش تكرار في الطبقات.
+      if (bare) {
+        if (b && b.replace(/^0+/, "") === bare) { out.push({ p: p, tier: 3 }); return; }
+        if (!bcOnly && c && c.replace(/^0+/, "") === bare) { out.push({ p: p, tier: 4 }); return; }
+      }
+    });
+    return out;
+  }
+
+  /* ══ «كل ما اكتب رقم من الباركود يبحث في المخزون ويكمّلي الرقم» (طلب 05/10 ≈18:20) ══
+     الكتابة اليدوية في خانة الكود بتجيب تحتها أرقام الأصناف اللي **بتبدأ** باللي كتبه
+     (باركود أو كود)، بحد `SCAN_SUGGEST_MAX`، و«مفيش» لما الإسكانر هو اللي بيكتب
+     (`scanIsBurst`) — عشان الاقتراح ما يعطّش المسح المتتابع. الاختيار بيزوّد الخانة
+     الرقم كامل ومن ما بيضيفش سطر: المالك لسه يتأكد ويدوس ➕.
+     ⚠️ ممنوع `datalist`: في RTL بيخطف Enter ويغير مسار الإسكانر ⇒ الرسالة بتاعتنا
+     بأزرار `data-scan-pick` في نفس الـ hint اللي بستخدمه المسح أصلًا. */
+  function scanSuggestItems(raw) {
+    const q = scanClean(raw).toUpperCase();
+    if (q.length < SCAN_SUGGEST_MIN) return [];
+    const out = [];
+    products.forEach((p) => {
+      if (!p.isActive) return;
+      const b = bcDigits(p.barcode).toUpperCase();
+      const c = String(p.code == null ? "" : p.code).trim().toUpperCase();
+      if (b && b.indexOf(q) === 0) out.push({ p: p, full: bcDigits(p.barcode), bc: true });
+      else if (c && c.indexOf(q) === 0) out.push({ p: p, full: c, bc: false });
+    });
+    out.sort((x, y) => (x.full.length - y.full.length) ||
+      String(x.p.nameAr || x.p.code).localeCompare(String(y.p.nameAr || y.p.code), "ar"));
+    return out.slice(0, SCAN_SUGGEST_MAX);
+  }
+
+  // html الاقتراح — فاضية لو مافيش حاجة تطابق (والـ hint بيتقفل، مش يفضل عفا عليه الزمن)
+  function scanSuggestHtml(raw) {
+    const list = scanSuggestItems(raw);
+    if (!list.length) return "";
+    const q = scanClean(raw);
+    return "💡 في المخزون أصناف أرقامها بتبدأ بـ <b class='scan-code'>" + esc(q) + "</b> — دوس على الرقم يكمّل في الخانة:" +
+      "<span class='scan-picks'>" + list.map((it) =>
+        "<button type='button' class='scan-act' data-scan-pick='" + esc(it.full) + "'>" +
+        esc(it.full) + (it.bc ? "" : " (كود)") + " — " + esc(it.p.nameAr || it.p.code) + "</button>"
+      ).join("") + "</span>";
+  }
+
+  /* بتنادي الاقتراح بعد أي كتابة يدوية. بترجع true لو عرض حاجة (والـ hint اتكتب)،
+     false لو الإسكانر بيكتب أو مافيش مطابق (فالـ hint بيتنضّف). */
+  function scanSuggestShow(hintSel, fieldId, raw) {
+    // الإسكانر شغال ⇒ مافيش اقتراح، **واقتراح الكتابة السابقة يتنضّف**. من غير السطر ده
+    // لو المالك كان بيكتب رقم بإيده (والشريط تحتة مليان أرقام) وإسكانر اتوهّط على نفس
+    // الخانة، شريط 💡 كان بيفضل معلق قدام العميل طول المسح لحد Enter.
+    if (scanIsBurst(fieldId, scanClean(raw).length)) { scanHint(hintSel); return false; }
+    const html = scanSuggestHtml(raw);
+    if (!html) { scanHint(hintSel); return false; }
+    scanHint(hintSel, "info", html);
+    return true;
+  }
+
+  // الدوس على رقم في الاقتراح ⇒ يمشي كامل في الخانة + يتعرّف على الصنف (بدون إضافة)
+  function scanSuggestPick(hintSel, fieldId, raw, onFilled) {
+    const el = $("#" + fieldId);
+    if (!el) return false;
+    el.value = scanClean(raw);
+    // الدوس بالإصبع = فعل بشري ⇒ أي طابع مسح قديم في نفس الخانة لازم يطمس، وإلا
+    // Enter الجاي بيتعامل كمسح (كمية مطلوبة + 🧮) بدل المسار القديم (يضيف بالكمية 1).
+    scanTraceClear(fieldId);
+    scanHint(hintSel);
+    if (onFilled) onFilled();
+    el.focus();
+    return true;
+  }
+
+  /* دايمًا كائن واحد: { prod, code, why, others, off } — `why` هو اللي بيحدّد الرسالة
+     الودّية (ممنوع أي اصطلاح تقني يظهر للعميل). الأرقام اللي مالهاش مطابقة حرفية
+     **بتترفض** مش بتتخمن؛ النصوص فيها حروف ترجع لطريقة الكتابة القديمة. */
+  function findProductByScan(raw) {
+    const code = scanClean(raw);
+    if (!code) return { prod: null, code: "", why: "empty" };
+    const bcOnly = scanHadSpace(raw);
+    const hits = scanMatches(code, bcOnly);
+    if (hits.length) {
+      let best = hits[0];
+      hits.forEach((h) => { if (h.tier < best.tier) best = h; });
+      const rivals = hits.filter((h) => h.tier === best.tier && h.p.id !== best.p.id);
+      if (rivals.length) {
+        /* `hits` كائنات مطابقة {tier,p} مش أصناف: كان `concat(rivals)` بيزقّ الكائن في
+           others، و`scanFailText` بتقرا p.nameAr ⇒ الاسم التاني كان بيفضل فاضي حرفيًا
+           في رسالة العميل («(كازورة · )» — قياس الحارس 143). لازم نفكّ `.p` الأول. */
+        return { prod: null, code: code, why: "ambiguous", others: [best.p].concat(rivals.map((h) => h.p)) };
+      }
+      const p = best.p;
+      if (!p.isActive) return { prod: null, code: code, why: "inactive", off: p };
+      return { prod: p, code: code, why: "ok" };
+    }
+    if (/^[0-9]+$/.test(code)) return { prod: null, code: code, why: "notfound" };
+    const p = findProductFlexible(code);
+    if (!p) return { prod: null, code: code, why: "notfound" };
+    if (!p.isActive) return { prod: null, code: code, why: "inactive", off: p };
+    return { prod: p, code: code, why: "ok" };
+  }
+
+  // الطبقة دي بتكتب الرسالة الودّية اللي تحت خانة الكود (مش توست عابر عشان العميل يقدر يقرا)
+  function scanHint(sel, kind, html) {
+    const el = $(sel);
+    if (!el) return;
+    if (!html) { el.hidden = true; el.innerHTML = ""; el.className = "scan-hint"; return; }
+    el.className = "scan-hint " + (kind || "info");
+    el.innerHTML = html;
+    el.hidden = false;
+  }
+
+  // ممنوع أي HTML في الرقم الممسوح ⇒ بيتمشى في الرسالة كنص صافي
+  function scanMsg(code, extra) {
+    return "<b class='scan-code'>" + esc(code || "") + "</b>" + (extra ? " " + extra : "");
+  }
+
+  /* الرسالة بكل حالاتها — كلها ودّية وبتدلّ على الخطوة الجاية، وممنوع فيها
+     (barcode/RLS/RPC/42501/Invalid) أو أي مصطلح تقني. */
+  function scanFailText(res) {
+    if (res.why === "empty") return "📷 مافيش رقم وصل — قلّب الإسكانر على الخانة، أو اكتب الكود/الاسم بنفسك.";
+    if (res.why === "inactive") return "🚫 الصنف (" + esc(res.off.nameAr || res.off.code) + ") متوقف للبيع — فعّله من «دليل الأصناف» الأول.";
+    if (res.why === "ambiguous") return "⚠️ الرقم ده مسجّل عند أكتر من صنف (" +
+      res.others.map((p) => esc(p.nameAr || p.code)).join(" · ") +
+      ") — اختار الصنف اللي تقصده بكتابة اسمه في خانة الاسم.";
+    return "🔍 ملقتش صنف بالرقم " + scanMsg(res.code) +
+      " — تقدر تكتب اسم الصنف في خانة الاسم، أو تسجّله صنف جديد بالرقم ده.";
+  }
+
   /* التوليد الجماعي: اللي ملوش باركود بس ⇒ ياخد رقم ميزان.
      الموجود ما بيتلمسش، والمكرّر بيتسجّل في `skipped` عشان يظهر في الرسالة. */
   function generateMissingBarcodes() {
@@ -2954,6 +3221,56 @@
     $("#fPBarcode").value = cand;
     renderBarcodePreview();
     toast("ده رقم باركود «ميزان» للصنف — بيتحفظ مع حفظ الصنف.", "success");
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     بناء 143 — مسح باركود المصنع **بالإسكانر** وقت إدخال الصنف في المخزن
+     (طلب المالك بحرفه 05/10: «محتاج عند ادخال الاصناف فى المخزن انه يدينى امكانية
+     مسح ضوئى لباركود المصنع»).
+     الخانة `#fPBarcode` بترقب الإسكانر زي ما بترقب الصابع: بيكتب الرقم ودوس Enter ⇒
+     بننضّف الرقم، نوريه في المعاينة، ونقول للمستخدم الخطوة الجاية. **ممنوع** إن Enter
+     يقفل النافذة أو يحفظ قبل ما المالك يكتب الاسم والسعر — فبنعمل preventDefault.
+     الفحص اللي بيمنع المكرر ويمنع غير القابل للتشفير لسه في `saveProduct` (مسار واحد).
+     ══════════════════════════════════════════════════════════════════════════ */
+  function bcScanHint(kind, html) { scanHint("#bcScanHint", kind, html); }
+
+  function barcodeFieldScan() {
+    const code = scanClean($("#fPBarcode").value);
+    $("#fPBarcode").value = code;
+    renderBarcodePreview();
+    if (!code) {
+      scanBeep("no");
+      bcScanHint("warn", "📷 مافيش رقم وصل في الخانة — قلّب الإسكانر على الباركود، أو اكتب الرقم بنفسك.");
+      return false;
+    }
+    if (bc128Bits(code) === "") {
+      scanBeep("no");
+      bcScanHint("warn", "⚠️ الرقم " + scanMsg(code) + " ما بيتقراش كود — يستخدم أرقام أو حروف إنجليزي بس.");
+      return false;
+    }
+    const clash = barcodeConflictOf(code, editingProductId);
+    if (clash) {
+      scanBeep("no");
+      bcScanHint("warn", "⚠️ الرقم " + scanMsg(code) + " مسجّل قبل كده لصنف تاني: " +
+        esc(clash.nameAr || clash.code) + " — غيّير رقم واحد فيهم قبل الحفظ.");
+      return false;
+    }
+    // رقم مصنع فيه 13 خانة ورقم التحقق بتاعه غلط ⇒ ممكن الإسكانر قرا نص رقم. تنبيه مش رفض.
+    const warn = /^[0-9]{13}$/.test(code) && gs1CheckDigit(code.slice(0, 12)) !== code.charAt(12)
+      ? "<span class='scan-sub'>رقم التحقق مش مطابق — لو تقدر امسّح تاني أحسن (الحفظ لسه بيقبله).</span>" : "";
+    // «صنف جديد» (طلب 05/10): الرقم مالوش صاح في الدليل ⇒ زنة مختلفة عن المسح المعتاد
+    scanBeep(products.some((p) => Number(p.id) === Number(editingProductId)) ? "ok" : "new");
+    bcScanHint("ok", "📷 اتقرا الرقم " + scanMsg(code) + " — اكتب اسم الصنف وسعّره ودوس «حفظ الصنف»." + warn);
+    return true;
+  }
+
+  // زرار «📷 مسح» = يجهّز الخانة (فوكس + تحديد) عشان الإسكانر يكتب فيها على طول
+  function barcodeFieldArm() {
+    const el = $("#fPBarcode");
+    if (!el) return;
+    el.focus();
+    el.select();
+    bcScanHint("info", "👉 الخانة جاهزة — مرّر الإسكانر على الباركود، أو اكتب الرقم بنفسك.");
   }
 
   /* ══ طباعة ملصقات الباركود ══ */
@@ -3354,6 +3671,7 @@
     }
     showModal("mProduct");
     renderBarcodePreview();   // 🔳 بناء 139: معاينة الباركود أول ما النافذة تفتح
+    scanHint("#bcScanHint");  // 📷 بناء 143: رسالة مسح قديمة من صنف تاني ما تفضلش معروضة
     $("#fPNameAr").focus();
   }
 
@@ -3929,6 +4247,322 @@
     else $("#txtPosSearch").focus();
   }
 
+  /* ══════════════════════════════════════════════════════════════════════════
+     بناء 143 — المسح الضوئي في **فاتورة البيع**
+     الإسكانر (1D أو 2D بيقرا المربع كمان) بيكتب الرقم في خانة «كود الصنف» ودوس Enter.
+     المسار ده **بينتهي عند نفس posAddItem** اللي الكتابة اليدوية بتستخدمها — يعني
+     المخزون والسعر والخصم والضمة والربط بالعميل كله من مصدر واحد (ممنوع مسارين).
+     والكتابة اليدوية ما اتلمستش: لو الحروف جت بسرعة بشرية ⇒ السلوك القديم حرفيًا.
+     ══════════════════════════════════════════════════════════════════════════ */
+  let lastPosScan = "";
+
+  /* ══ «ممنوع المسح يخترع كمية» (طلب المالك 05/10 ≈18:05، بحرفه) ══
+     «لما الموبايل يعمل سكان لمنتج فى الباركود لا يتم ادخال كمية 1، والمفروض انه لازم
+     يكتب الكمية» ⇒ النشيط `posQtyTyped` بيتحط لما المالك يلمس خانة الكمية **فعلًا**
+     (مستمع `input`)، والمسح بيضيف بالكمية اللي اتكتبت. ولو الخانة فاضية أو صفر أو مش رقم
+     ⇒ الصنف **يتعرّف** (الرسالة + السعر + الرقم القانوني في خانة الكود) بس ما يتضافش،
+     والتركيز يروح لخانة الكمية.
+     ⚠️ المسار اليدوي سايب زي ما هو حرفيًا: زرار ➕ وEnter بعد الكتابة بياخدوا 1 لو
+     الخانة فاضية (`posAddItem`)، و`posNewInvoice` لسه بيملّي «1» زي الأول. */
+  let posQtyTyped = false;
+  let ppQtyTyped = false;
+
+  /* المسح: نخلّي الخانة تحمل **الرقم القانوني** للصنف (باركوده، أو كوده لو باركود
+     المصنع اتقرا بتسامح الأصفار) ⇒ posAddItem يلاقيه بالطابقة الحرفية ديغني، وبعدين
+     تناديه. بعد الإضافة بنرجّع التركيز لنفس الخانة عشان المسح المتتابع يشتغل بلا clicks.
+     الزنة (`scanBeep`) بتتنادى **بعد** القرار: ok = صنف اتضاف · no = مرفوض/مافيش صنف. */
+  /* القياس الوحيد ل«السطر نزل»: كمية الصنف دي كام في الفاتورة دلوقتي (البيع والشراء
+     بيعدّوا من نفس السطور — مش من رسالة ولا من «اسم الصنف موجود ولا لأ»، لأندها بيصدق
+     على سطر قديم والإضافة الجديدة تكون اترفضت). */
+  function invoiceQtyOf(list, p) {
+    let s = 0;
+    list.forEach((it) => { if (Number(it.productId) === Number(p.id)) s += Number(it.qty) || 0; });
+    return s;
+  }
+
+  function posHandleScan(raw) {
+    const res = findProductByScan(raw);
+    if (!res.prod) {
+      lastPosScan = res.code;
+      scanBeep("no");
+      scanHint("#posScanHint", "warn", scanFailText(res) +
+        (res.why === "notfound"
+          ? " <button type='button' class='scan-act' data-scan-new='1'>➕ سجّله صنف جديد</button>" : ""));
+      return;
+    }
+    const p = res.prod;
+    const wh = $("#cmbPosWarehouse").value || WAREHOUSES[0];
+    const have = Number(stockAt(p, wh)) || 0;
+    $("#txtPosSearch").value = "";
+    $("#txtPosCode").value = bcDigits(p.barcode) || String(p.code || "");
+    posAddSource = "code";
+    // ⚠️ «خانة السعر» read-only من قبل 143 (مقاس على f856a4b) ⇒ اللي فيها جايبه الدليل
+    // دايمًا، مش إيد المالك. فلو سبناها بقت سعر صنف **سابق** (المالك كان بيكتب اسم صنف
+    // تاني في خانة الاسم ⇒ `posOnSearch` ملّى الخانة بيه) ⇒ المسح ينزل الصنف ده بثمن
+    // صنف تاني على فاتورة العميل. ⇒ المسح بيمسك **سعر الصنف الممسوح** حرفيًا.
+    $("#txtPosPrice").value = moneyStr(p.salePrice);
+    const price = moneyVal("#txtPosPrice");
+    const qty = moneyVal("#numPosQty");
+    if (!posQtyTyped || !(qty > 0)) {
+      lastPosScan = res.code;
+      scanBeep("no");
+      scanHint("#posScanHint", "warn", "🧮 الصنف (" + esc(p.nameAr || p.code) +
+        ") اتعرّف — اكتب الكمية في خانة «الكمية» ودوس ➕ (المسح ما يخترعش كمية)." +
+        "<span class='scan-sub'>المتوفر في («" + esc(wh) + "»): " + have + " " + esc(p.unit || "") +
+        " · سعر البيع: " + fmt(price) + " ج.م</span>");
+      const q = $("#numPosQty");
+      q.focus();
+      if (q.select) q.select();
+      return;
+    }
+    /* 🔴 كمية المالك ما تمسحش إلا لما الإضافة تنجح فعلًا (قياس حيّ ٠٦/١٠: مسحة بكمية
+       أكبر من المتوفر ⇒ `posAddItem` بترفض، لكن السطور القديمة كانت بتمسح الخانة
+       وتقول «اتضاف» لأن الحكم كان «الصنف موجود في الفاتورة» — وده بيصدق حتى لو السطر
+       ده من مسحة قبلها). المقياس الصح: **كمية الصنف في الفاتورة زادت**. وبعد النجاح
+       الخانة ترجع فاضية والنشيط يتشال، فمسحة تانية ما تضيفش بكمية الصنف اللي قبلها. */
+    const qtyBefore = invoiceQtyOf(posItems, p);
+    posAddItem();
+    const added = invoiceQtyOf(posItems, p) > qtyBefore;
+    if (added) {
+      $("#numPosQty").value = "";
+      posQtyTyped = false;
+      scanBeep("ok");
+      scanHint("#posScanHint", "ok", "📷 " + esc(p.nameAr || p.code) + " — " +
+        qty + " × " + fmt(price) + " ج.م اتضاف للفاتورة." +
+        "<span class='scan-sub'>امسّح الصنف اللي بعده — واكتب كميته قبل ما يضاف.</span>");
+    } else if (!(have > 0)) {
+      scanBeep("no");
+      scanHint("#posScanHint", "warn", "📦 الصنف (" + esc(p.nameAr || p.code) +
+        ") مافيش منه في مخزن («" + esc(wh) + "») — غيّر المخزن أو زوّد الرصيد من «المخزون».");
+    } else if (!(price > 0)) {
+      scanBeep("no");
+      scanHint("#posScanHint", "warn", "🏷️ الصنف (" + esc(p.nameAr || p.code) +
+        ") ملوش سعر بيع مسجّل — حدّدوله في «دليل الأصناف» وبعدين امسّحوه تاني.");
+    } else {
+      scanBeep("no");
+      scanHint("#posScanHint", "warn", "📦 المتوفر من (" + esc(p.nameAr || p.code) +
+        ") في («" + esc(wh) + "») = " + have + " " + esc(p.unit || "") + " — أقل من الكمية اللي طلبتها.");
+    }
+  }
+
+  // Enter في خانة الكود: إمّا إنهاء مسح (سريع) ⇒ نختار الصنف، أو إنهاء كتابة ⇒ المسار القديم
+  function posCodeEnter() {
+    const raw = $("#txtPosCode").value;
+    if (scanIsBurst("txtPosCode", scanClean(raw).length)) { posHandleScan(raw); return; }
+    posAddVia("code");
+  }
+
+  // الإسكانر بيتوّه أحيانًا على خانة الاسم — بنستقبله هناك بنفس الذكاء
+  function posSearchEnter() {
+    const raw = $("#txtPosSearch").value;
+    if (scanIsBurst("txtPosSearch", scanClean(raw).length)) { posHandleScan(raw); return; }
+    posAddVia("search");
+  }
+
+  function posAddVia(src) {
+    posAddSource = src;
+    posAddItem();
+    // الإضافة اليدوية خلّت الخانة «1» مكتوبة بالـ JS ⇒ النشيط يتشال، والمسح الجاي
+    // يطلب كمية من المالك (ممنوع مسحة تضيف بـ 1 ما حدش كتبها)
+    posQtyTyped = false;
+    scanHint("#posScanHint");
+  }
+
+  function posNewInvoiceClean() {
+    posNewInvoice();
+    lastPosScan = "";
+    posQtyTyped = false;
+    coldReset();
+    scanHint("#posScanHint");
+    $("#txtPosCode").focus();
+  }
+
+  /* زرار «📷 مسح» في **رأس فاتورة البيع** (طلب 05/10 ≈18:05: «عايز زرار لتشغيل الماسح
+     اللى بيقرا الباركود بجانب راس الفاتورة»): الماكينات بتكتب في الخانة المركّزة عليها،
+     فالزرار وظيفته **تجهيز** الخانة (فوكس + تحديد) ورسالة تدلّ على الخطوة — **مافيش أي
+     كتابة في البيانات ولا أي إضافة**. نفس `barcodeFieldArm` بتاعة نافذة الصنف بالحرف. */
+  function posScanArm() {
+    const el = $("#txtPosCode");
+    if (!el) return;
+    el.focus();
+    el.select();
+    scanHint("#posScanHint", "info", "👉 الخانة جاهزة — مرّر الماسح على الباركود، أو اكتب الكود/الاسم بنفسك.");
+  }
+
+  // نفس الزرار في رأس فاتورة الشراء
+  function ppScanArm() {
+    const el = $("#txtPPCode");
+    if (!el) return;
+    el.focus();
+    el.select();
+    scanHint("#ppScanHint", "info", "👉 الخانة جاهزة — مرّر الماسح على الباركود، أو اكتب الكود/الاسم بنفسك.");
+  }
+
+  /* ══ المسح «بلا زرار» (تفسير لنفس طلب الزرار، قاله المالك 05/10 ≈20:40 بحرفه:
+     «حتى لو البائع او المشترى لم يضغط عليه فمجرد ان قارئ الباركود يقرا صنف يضيفه ايضا
+     حتى لو لم يضغط على زرار القارى») ═════════════════════════════════════════════════
+     الإسكانر لوحة-مفاتيح: بيرمي حروفه على اللي عليه Focus. لو Focus على جسم الصفحة أو
+     زرار أو جدول (البائع ما دوسش على أي خانة) ⇒ الحروف كانت بتضيع والماكينة تبان مكسورة.
+     الطبقة دي بتلتقط من `document` في مرحلة الالتقاط **وتوجّه لنفس الدالة القديمة**
+     (`posHandleScan` / `ppHandleScan`) ⇒ مافيش مسار تاني للمسح، ونفس قاعدة الكمية
+     («المسح ما يخترعش كمية») ونفس الرسائل والزنة.
+     تنحّي الطبقة (كل شرط مقاس، أي واحدة false ⇒ مافيش أي تدخل في الكيبورد):
+       (١) شاشة البيع أو الشراء هي الظاهرة (`showView` بتسيب `v.hidden = v.dataset.id !== name`)
+       (٢) مافيش نافذة مفتوحة (`.modal-overlay` بلا `hidden`) — النافذة ليها خانتها ومسارها
+       (٣) اللي عليه Focus مش خانة بيكتب فيها البائع حالًا (كود/اسم ⇒ مستمعها القديم شغال)
+       (٤) السلسلة سريعة فعلًا (`scanKey("cold")` + `scanIsBurst`) ⇒ الصابع البشري ما يتسرقش
+     والإسكانرات اللي ما ترسلش Enter بتتوجه بعد صمت `COLD_SCAN_QUIET_MS` — البائع ما يستناشش. */
+  const COLD_SCAN_VIEWS = [["viewSales", "pos"], ["viewPurchases", "pp"]];
+  const COLD_SCAN_QUIET_MS = 400;
+  /* 🔴 درس القياس الحيّ (كيبورد حقيقي على الحزمة المنشورة، ٠٦/١٠): البائع اللي بيكتب
+     الكمية بإيده على النمرات بيسبق الإسكانر في نفس الخانة — فـ «السلسلة السريعة» لوحدها
+     ما تفرّقش: «١٢٠٠» بسرعة الصابع بتبقى ٤ حروف بفواصل < ٩٠ms. ⇒ في الوضع الرجّاع
+     ("type" = خانة كمية/سعر بيكتب فيها المالك) لازم الرقم يبقى **بطول باركود** قبل ما
+     يتحوّل لمسحة. باركودات EAN-8 وUPC وEAN-13 كلها ≥ ٨ خانات، فما فيكمش كمية ولا سعر
+     حقيقي يتكتب ٨ خانات بسرعة ٩٠ms ويضيع. */
+  const COLD_SCAN_TYPE_MIN = 8;
+  // الحروف اللي ماكينة الباركود بترميها (أرقام لاتينية/عربية + حرف + شرطة + نقطة + مسافة)
+  const COLD_SCAN_CHR = /^[0-9A-Za-z٠-٩۰-۹\-.\s]$/;
+  /* الخانات اللي البائع بيكتب فيها وبعدها بيمرّر الماسح وهو لسه واقف عليها ⇒ رقم الإسكانر
+     بيوقع فيها. نتعامل معاتها بالحرف زي خانة الاسم: سيّب الحروف تعدى (عشان لو كان صابع
+    فضل زي ما هو)، ولو اتأكد إنه إسكانر **ارجّع الخانة لقيمتها قبل السلسلة** ووجّه الرقم. */
+  const COLD_SCAN_REVERT = ["numPosQty", "numPPQty", "txtPPPrice"];
+  let coldBuf = "";
+  let coldMode = null;      // "type" (خانة رجّاعة) | "capture" (مافيش كتابة)
+  let coldEl = null;
+  let coldBase = "";
+  let coldQuiet = null;
+
+  function coldModalOpen() {
+    const list = document.querySelectorAll(".modal-overlay");
+    for (let i = 0; i < list.length; i++) { if (!list[i].hidden) return true; }
+    return false;
+  }
+
+  // "pos" | "pp" | null — الفاتورة الظاهرة دلوقتي
+  function coldInvoice() {
+    if (coldModalOpen()) return null;
+    for (let i = 0; i < COLD_SCAN_VIEWS.length; i++) {
+      const el = document.getElementById(COLD_SCAN_VIEWS[i][0]);
+      if (el && !el.hidden) return COLD_SCAN_VIEWS[i][1];
+    }
+    return null;
+  }
+
+  /* null ⇒ البائع بيكتب حالًا (ما نلمشش كتابته) · "type" ⇒ خانة رقم بس نرجّعها ·
+     "capture" ⇒ مافيش تركيز على كتابة ⇒ نمنع الحروف تضيع وتنفّذ أي زرار عليها */
+  function coldFocusMode() {
+    const el = document.activeElement;
+    if (!el) return "capture";
+    const tag = (el.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || el.isContentEditable === true) {
+      if (el.readOnly || el.disabled) return "capture";
+      if (COLD_SCAN_REVERT.indexOf(el.id) >= 0) return "type";
+      return null;
+    }
+    return "capture";
+  }
+
+  /* «ده إسكانر» مقاس من نفس الختم الزمني — بس بنطاق حسب الوضع:
+       capture ⇒ `SCAN_MIN_LEN` (مافيش كتابة أصلًا، فأي سلسلة سريعة مسحة)
+       type    ⇒ `COLD_SCAN_TYPE_MIN` (الخانة دي البائع بيكتب فيها رقمه بإيده)
+     `scanIsBurst` دالة قراءة صرفة (ممنوع إسناد/`Date.now` فيها — مقاس في الحارس). */
+  function coldBurstOf(mode, raw) {
+    const n = scanClean(raw).length;
+    if (n < SCAN_MIN_LEN) return false;
+    if (mode === "type" && n < COLD_SCAN_TYPE_MIN) return false;
+    return scanIsBurst("cold", n);
+  }
+
+  function coldReset() {
+    coldBuf = ""; coldMode = null; coldEl = null; coldBase = "";
+    if (coldQuiet) { clearTimeout(coldQuiet); coldQuiet = null; }
+    scanTraceClear("cold");
+  }
+
+  function coldArmQuiet() {
+    if (coldQuiet) clearTimeout(coldQuiet);
+    coldQuiet = setTimeout(coldFlush, COLD_SCAN_QUIET_MS);
+  }
+
+  /* التوجيه — مصدر واحد لكل لحظتين (Enter والصمت): يتأكد إنه إسكانر، ينضّف الخانة لو
+     اتوهّط عليها، وبعدين ينادي **نفس** دالة المسح القديمة بحرفيتها. */
+  function coldFlush() {
+    if (coldQuiet) { clearTimeout(coldQuiet); coldQuiet = null; }
+    const all = coldBuf, mode = coldMode, el = coldEl, typed = coldBase, inv = coldInvoice();
+    /* 🔴 الفاصل بين «رقم البائع» و«مسحة الإسكانر» — من **نفس مصدر القرار**، بس في آخر لحظة.
+       البائع بيكتب الكمية بإيده (١٦٠ms+) وبعدها بيمرّر الماسح على طول قبل ما عدّاد الصمت
+       ٤٠٠ms يخلص ⇒ الوعاء بيقعّ الرقمين فوق بعض: "2" + ١٣ خانة ⇒ «ملقتش صنف بالرقم
+       22000000000015» (مقاس حيًّا ٠٦/١٠ في ص-٣ب البيع و ص-٦ج الشراء).
+       `scanKey("cold")` بيعدّي السلسلة السريعة بكل حرف (بنفس `SCAN_MAX_GAP_MS` اللي
+       `scanIsBurst` بيفرّق بيها) ⇒ «طول آخر سلسلة» حرفيًا = كام حرف من الوعاء جايين من
+       الماكينة. اللي قبلهم صابع ⇒ بيفضلوا في الخانة (أساس جديد = المكتوب + المتسيّب)
+       وما يدخلوش الرقم. ممنوع ساعة تانية أو عتبة تانية — وممنوع قصّ في نص المسحة:
+       السلسلة القصيرة (`< SCAN_MIN_LEN`) ما بتتقصّش خالص. */
+    const run = Math.min(all.length, (scanTrace.cold || {}).streak || 0);
+    const raw = run >= SCAN_MIN_LEN && run < all.length ? all.slice(all.length - run) : all;
+    const base = typed + all.slice(0, all.length - raw.length);
+    const isScan = raw !== "" && coldBurstOf(mode, raw);
+    coldReset();
+    if (!isScan || !inv) return;                       // صابع بطيئة أو شاشة تانية ⇒ مافيش أثر
+    const code = scanClean(raw);
+    if (!code) return;
+    if (mode === "type" && el) {
+      el.value = base;                                  // رقم الإسكانر ما ينفعش يبقى كمية/سعر
+      if (el.id === "numPosQty") posQtyTyped = base !== "";
+      else if (el.id === "numPPQty") ppQtyTyped = base !== "";
+    }
+    if (inv === "pos") posHandleScan(code);
+    else ppHandleScan(code);
+  }
+
+  function coldScanKey(e) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;     // أي اختصار حقيقي مالوش دعوى بالمسح
+    const k = e.key;
+    const inv = coldInvoice();
+    if (!inv) { if (coldBuf) coldReset(); return; }     // بره الفاتورتين ⇒ الكيبورد صاحبه زي الأول
+    if (k === "Enter") {
+      if (!coldBuf) return;                             // مافيش رقم عندنا ⇒ ما نلغيش Enter حد تاني
+      /* 🔴 درس القياس الحيّ (٠٦/١٠): البائع بيكتب الكمية بإيده في «الكمية» وبعدها بدوس
+         Enter على طول — والقديم كان بياكل الـ Enter دايمًا طالما عنده حرف واحد، فالسطر
+         ما بيتضافش والمهمّة تنصف. ⇒ الـ Enter بيتبلّع **لما تكون السلسلة إسكانر فعلًا**
+         (`coldBurstOf`)؛ غير كده دي كتابة المالك وراحت لمسار الخانة القديم بلا أي تدخل. */
+      if (!coldBurstOf(coldMode, coldBuf)) { coldReset(); return; }
+      e.preventDefault(); e.stopPropagation();
+      coldFlush();
+      return;
+    }
+    if (k === "Tab" || k === "Escape" || k === "Backspace") { if (coldBuf) coldReset(); return; }
+    if (k.length !== 1 || !COLD_SCAN_CHR.test(k)) return;
+    const mode = coldFocusMode();
+    if (!mode) return;
+    if (!coldBuf) {
+      coldMode = mode;
+      coldEl = document.activeElement;
+      coldBase = coldEl && typeof coldEl.value === "string" ? coldEl.value : "";
+    }
+    if (mode === "capture") { e.preventDefault(); e.stopPropagation(); }
+    coldBuf += k;
+    scanKey("cold");
+    coldArmQuiet();
+  }
+
+  /* رقم باركود اتقرا وما كانش ليها صنف ⇒ النافذة تفتح **والخانة مملّأة بيه**، فالمالك
+     يكتب الاسم والسعر بس (طلبه 05/10: «محتاج عند ادخال الاصناف فى المخزن انه يدينى
+     امكانية مسح ضوئى لباركود المصنع»). */
+  function openProductDialogForScan(raw) {
+    const code = scanClean(raw);
+    openProductDialog(null);
+    if (code) {
+      scanBeep("new");   // «صنف جديد» — الرقم اتعرّف عليه ومالوش صاحب في الدليل
+      $("#fPBarcode").value = code;
+      renderBarcodePreview();
+      bcScanHint("ok", "📷 باركود المصنع " + scanMsg(code) +
+        " اتحط في الخانة — اكتب اسم الصنف وسعّره ودوس «حفظ الصنف».");
+    }
+    $("#fPNameAr").focus();
+  }
+
   function posCalcRow(idx) {
     const it = posItems[idx];
     const sub = Math.max(it.qty * it.price - it.discount, 0);
@@ -4429,6 +5063,98 @@
     ppRecalc();
     if (ppAddSource === "code") $("#txtPPCode").focus();
     else $("#txtPPSearch").focus();
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     بناء 143 — المسح الضوئي في **فاتورة الشراء** (نفس منطق البيع، بالاسم التاني)
+     طلب المالك: المسح في «فاتورة البيع والشراء» — والتعديل الحرفي بتاعه: الكتابة
+     اليدوية تفضل متاحة («ممكن ميكونش له باركود أو ممكن يكون البائع ليس لديه ماكينة»).
+     ══════════════════════════════════════════════════════════════════════════ */
+  let lastPpScan = "";
+
+  function ppHandleScan(raw) {
+    const res = findProductByScan(raw);
+    if (!res.prod) {
+      lastPpScan = res.code;
+      scanBeep("no");
+      scanHint("#ppScanHint", "warn", scanFailText(res) +
+        (res.why === "notfound"
+          ? " <button type='button' class='scan-act' data-scan-new='1'>➕ سجّله صنف جديد</button>" : ""));
+      return;
+    }
+    const p = res.prod;
+    $("#txtPPSearch").value = "";
+    $("#txtPPCode").value = bcDigits(p.barcode) || String(p.code || "");
+    ppAddSource = "code";
+    // ⚠️ **الفرق المقصود عن البيع** (مقاس على الأساس f856a4b، مش تخمين): خانة «سعر البيع»
+    // `readonly` ⇒ اللي فيها من الدليل، فالبيع بيمسك سعر الصنف الممسوح دايمًا. أما
+    // «سعر الشراء» **مفتوحة للمالك بإيده** و`ppOnCode` ما تلمسهاش خالص ⇒ أي رقم فيها
+    // قرار منه ⇒ المسح يحترمه، وملء الدليل بس لما تكون فاضية (`ppAddItem` كمان بيقبلها).
+    if (!(moneyVal("#txtPPPrice") > 0)) $("#txtPPPrice").value = moneyStr(p.purchasePrice);
+    const price = moneyVal("#txtPPPrice");
+    const qty = moneyVal("#numPPQty");
+    // نفس قاعدة البيع: المسح ما يخترعش كمية — المالك يكتبها (طلب 05/10 ≈18:05)
+    if (!ppQtyTyped || !(qty > 0)) {
+      lastPpScan = res.code;
+      scanBeep("no");
+      scanHint("#ppScanHint", "warn", "🧮 الصنف (" + esc(p.nameAr || p.code) +
+        ") اتعرّف — اكتب الكمية في خانة «الكمية» ودوس ➕ (المسح ما يخترعش كمية)." +
+        "<span class='scan-sub'>سعر الشراء: " + fmt(price) + " ج.م · الوحدة: " + esc(p.unit || "") + "</span>");
+      const q = $("#numPPQty");
+      q.focus();
+      if (q.select) q.select();
+      return;
+    }
+    // نفس قياس البيع بالحرف: كمية المالك ما تتمسحش إلا لو السطر نزل فعلًا (٠٦/١٠)
+    const qtyBefore = invoiceQtyOf(ppItems, p);
+    ppAddItem();
+    const added = invoiceQtyOf(ppItems, p) > qtyBefore;
+    if (added) {
+      $("#numPPQty").value = "";
+      ppQtyTyped = false;
+      scanBeep("ok");
+      scanHint("#ppScanHint", "ok", "📷 " + esc(p.nameAr || p.code) + " — " +
+        qty + " × " + fmt(price) + " ج.م اتضاف لفاتورة الشراء." +
+        "<span class='scan-sub'>امسّح الصنف اللي بعده — واكتب كميته قبل ما يضاف.</span>");
+    } else if (!(price > 0)) {
+      scanBeep("no");
+      scanHint("#ppScanHint", "warn", "🏷️ الصنف (" + esc(p.nameAr || p.code) +
+        ") ملوش سعر شراء مسجّل — حدّدوله في «دليل الأصناف» أو اكتب السعر في خانة «سعر الشراء».");
+    } else {
+      scanBeep("no");
+      scanHint("#ppScanHint", "warn", "⚠️ (" + esc(p.nameAr || p.code) +
+        ") ما اتضافش — شوف الرسالة اللي فوق وكمّل.");
+    }
+  }
+
+  function ppCodeEnter() {
+    const raw = $("#txtPPCode").value;
+    if (scanIsBurst("txtPPCode", scanClean(raw).length)) { ppHandleScan(raw); return; }
+    ppAddVia("code");
+  }
+
+  function ppSearchEnter() {
+    const raw = $("#txtPPSearch").value;
+    if (scanIsBurst("txtPPSearch", scanClean(raw).length)) { ppHandleScan(raw); return; }
+    ppAddVia("search");
+  }
+
+  function ppAddVia(src) {
+    ppAddSource = src;
+    ppAddItem();
+    // نفس سطر البيع بالحرف: الإضافة اليدوية خلّت «1» مكتوبة بالـ JS ⇒ النشيط يتشال،
+    // والمسح الجاي يطلب كمية من المالك (ممنوع مسحة تضيف بـ 1 ما حدش كتبها)
+    ppQtyTyped = false;
+    scanHint("#ppScanHint");
+  }
+
+  function ppNewInvoiceClean() {
+    ppNewInvoice();
+    lastPpScan = "";
+    ppQtyTyped = false;
+    coldReset();
+    scanHint("#ppScanHint");
+    $("#txtPPCode").focus();
   }
 
   function ppCalcRow(idx) {
@@ -9745,7 +10471,15 @@
     // 🔳 بناء 139: باركود الأصناف — توليد جماعي + توليد/معاينة جوه النافذة + طباعة الملصق
     $("#btnGenBarcodes").addEventListener("click", doGenerateBarcodes);
     $("#btnGenOneBarcode").addEventListener("click", generateBarcodeInDialog);
-    $("#fPBarcode").addEventListener("input", renderBarcodePreview);
+    $("#fPBarcode").addEventListener("input", () => { renderBarcodePreview(); scanHint("#bcScanHint"); });
+    // 📷 بناء 143: الإسكانر بيكتب رقم باركود المصنع ودوس Enter ⇒ الرقم يدخل المعاينة والرسالة
+    // توصّي بالخطوة الجاية، و**ممنوع** Enter يقفل النافذة أو يسبق كتابة الاسم والسعر.
+    $("#fPBarcode").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); barcodeFieldScan(); }
+    });
+    // 📷 نفس الخانة بتستقبل إسكانر «بيلصق» الرقم — وبنفس مسار Enter (مافيش طريق تاني)
+    $("#fPBarcode").addEventListener("paste", () => scanPasteRun("fPBarcode", barcodeFieldScan));
+    $("#btnFBarcodeScan").addEventListener("click", barcodeFieldArm);
     $("#btnPrintBarcode").addEventListener("click", printBarcodeLabels);
     $("#btnCancelBarcodePrint").addEventListener("click", () => hideModal("mBarcodePrint"));
 
@@ -9776,22 +10510,47 @@
     $("#btnCancelQuickCustomer").addEventListener("click", () => hideModal("mQuickCustomer"));
 
     $("#cmbPaymentMethod").addEventListener("change", posPaymentVisibility);
-    $("#txtPosCode").addEventListener("input", posOnCode);
+    // 📷 بناء 143: كل حرف بيمرّ على scanKey ⇒ السلسلة الزمنية بتتقاس **أثناء** الكتابة،
+    // وبعدها Enter بيقرا النتيجة بس (من غير دي، الإسكانر كان بيتعامل معاملة الصابع).
+    // + الإكمال اليدوي (طلب 05/10 ≈18:20: «كل ما اكتب رقم من الباركود يبحث في المخزون
+    // علشان يكمل لى الرقم»): `scanSuggestShow` بترجع false أثناء المسح ⇒ الاقتراح ما
+    // يعطّش رسالة الإسكانر ولا يقطع المسح المتتابع.
+    $("#txtPosCode").addEventListener("input", () => {
+      scanKey("txtPosCode");
+      posOnCode();
+      scanSuggestShow("#posScanHint", "txtPosCode", $("#txtPosCode").value);
+    });
+    // 📷 بناء 143: Enter من الإسكانر = «اختار الصنف»، ومن الصابع = «ضيف السطر» (المسار القديم)
     $("#txtPosCode").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); posAddSource = "code"; posAddItem(); }
+      if (e.key === "Enter") { e.preventDefault(); posCodeEnter(); }
     });
-    $("#txtPosSearch").addEventListener("input", posOnSearch);
+    // 📷 إسكانر بيلصق الرقم دفعة واحدة (فئة من الماكينات + تطبيقات المسح على الموبايل)
+    $("#txtPosCode").addEventListener("paste", () => scanPasteRun("txtPosCode", posCodeEnter));
+    $("#txtPosSearch").addEventListener("input", () => { scanKey("txtPosSearch"); posOnSearch(); });
     $("#txtPosSearch").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); posAddSource = "search"; posAddItem(); }
+      if (e.key === "Enter") { e.preventDefault(); posSearchEnter(); }
     });
+    $("#txtPosSearch").addEventListener("paste", () => scanPasteRun("txtPosSearch", posSearchEnter));
+    // 🧮 الكمية اللي «لازم تتكتب» (05/10 ≈18:05): `input` بيجي من الصابع بس — الكتابة
+    // بالـ JS (posAddItem / posNewInvoice) ما بيشعلوش ⇒ النشيط يعني المالك لمس الخانة فعلًا.
+    $("#numPosQty").addEventListener("input", () => { posQtyTyped = true; });
     $("#numPosQty").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); posAddSource = "search"; posAddItem(); }
+      if (e.key === "Enter") { e.preventDefault(); posAddVia("search"); }
     });
     $("#txtPosPrice").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); posAddSource = "search"; posAddItem(); }
+      if (e.key === "Enter") { e.preventDefault(); posAddVia("search"); }
     });
-    $("#btnPosAdd").addEventListener("click", posAddItem);
-    $("#btnPosNew").addEventListener("click", posNewInvoice);
+    $("#btnPosAdd").addEventListener("click", () => { posAddItem(); posQtyTyped = false; scanHint("#posScanHint"); });
+    $("#btnPosNew").addEventListener("click", posNewInvoiceClean);
+    // 📷 زر المسح في رأس الفاتورة (05/10 ≈18:05) = يجهّز الخانة وبس
+    $("#btnPosScanArm").addEventListener("click", posScanArm);
+    // 📷 لو الرقم الممسوح ملوش صنف ⇒ زرار في الرسالة يفتح نافذة الصنف والخانة مملانة بالرقم
+    //    + لو المالك بيكتب باليد ⇒ زرار الاقتراح (`data-scan-pick`) يكمّل الرقم في الخانة
+    $("#posScanHint").addEventListener("click", (e) => {
+      if (e.target.closest("[data-scan-new]")) { openProductDialogForScan(lastPosScan); return; }
+      const pk = e.target.closest("[data-scan-pick]");
+      if (pk) scanSuggestPick("#posScanHint", "txtPosCode", pk.getAttribute("data-scan-pick"), posOnCode);
+    });
     $("#btnPosSave").addEventListener("click", savePosInvoice);
     $("#txtPosDiscount").addEventListener("input", posRecalc);
     $("#cmbPosWarehouse").addEventListener("change", () => {
@@ -9832,22 +10591,41 @@
       const firstProd = products.find((p) => p.id === (ppItems[0] && ppItems[0].productId));
       ppUpdateBadge(firstProd || null);
     });
-    $("#txtPPCode").addEventListener("input", ppOnCode);
+    $("#txtPPCode").addEventListener("input", () => {
+      scanKey("txtPPCode");
+      ppOnCode();
+      scanSuggestShow("#ppScanHint", "txtPPCode", $("#txtPPCode").value);
+    });
+    // 📷 بناء 143: نفس منطق البيع — Enter من الإسكانر يختار الصنف، ومن الصابع يضيف السطر
     $("#txtPPCode").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); ppAddSource = "code"; ppAddItem(); }
+      if (e.key === "Enter") { e.preventDefault(); ppCodeEnter(); }
     });
-    $("#txtPPSearch").addEventListener("input", ppOnSearch);
+    $("#txtPPCode").addEventListener("paste", () => scanPasteRun("txtPPCode", ppCodeEnter));
+    $("#txtPPSearch").addEventListener("input", () => { scanKey("txtPPSearch"); ppOnSearch(); });
     $("#txtPPSearch").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); ppAddSource = "search"; ppAddItem(); }
+      if (e.key === "Enter") { e.preventDefault(); ppSearchEnter(); }
     });
+    $("#txtPPSearch").addEventListener("paste", () => scanPasteRun("txtPPSearch", ppSearchEnter));
+    // 🧮 نفس قاعدة البيع: الكمية تتكتب من الصابع، والمسح ما يخترعش 1
+    $("#numPPQty").addEventListener("input", () => { ppQtyTyped = true; });
     $("#numPPQty").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); ppAddSource = "search"; ppAddItem(); }
+      if (e.key === "Enter") { e.preventDefault(); ppAddVia("search"); }
     });
     $("#txtPPPrice").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); ppAddSource = "search"; ppAddItem(); }
+      if (e.key === "Enter") { e.preventDefault(); ppAddVia("search"); }
     });
-    $("#btnPPAdd").addEventListener("click", ppAddItem);
-    $("#btnPPNew").addEventListener("click", ppNewInvoice);
+    $("#btnPPAdd").addEventListener("click", () => { ppAddItem(); ppQtyTyped = false; scanHint("#ppScanHint"); });
+    $("#btnPPNew").addEventListener("click", ppNewInvoiceClean);
+    $("#btnPPScanArm").addEventListener("click", ppScanArm);
+    /* 📷 المسح «بلا زرار»: مستند-عام في مرحلة الالتقاط، فبيشتغل حتى لو Focus على الزرار أو
+       الجدول أو جسم الشاشة (تفسير المالك لنفس طلب زرار المسح). مستمع الخانات الخاصة لسه
+       هو اللي بيتصرّف لو البائع واقف على خانة بيكتب فيها (`coldFocusMode` بترجع null). */
+    document.addEventListener("keydown", coldScanKey, true);
+    $("#ppScanHint").addEventListener("click", (e) => {
+      if (e.target.closest("[data-scan-new]")) { openProductDialogForScan(lastPpScan); return; }
+      const pk = e.target.closest("[data-scan-pick]");
+      if (pk) scanSuggestPick("#ppScanHint", "txtPPCode", pk.getAttribute("data-scan-pick"), ppOnCode);
+    });
     $("#btnPPSave").addEventListener("click", savePurchaseInvoice);
     $("#txtPPDiscount").addEventListener("input", ppRecalc);
 
