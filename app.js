@@ -9,6 +9,13 @@
 
   // رقم الإصدار المعروض للمستخدم — مصدره window.MIZAN_VERSION في index.html (تعديل هناك بس)
   const APP_VERSION = window.MIZAN_VERSION || "1.4.1";
+  /* 🔴 07/10 أمر المالك الحرفي: «و كل ما تحدث تغير ال V للرقم الجديد» ⇒ الختم المعروض
+     **مش** رقم المنتج لحاله، ده `window.mizanVerLabel()` بتاعة index.html (رقم المنتج +
+     عدّاد النشر) — وديماً بقراءة حيّة وقت الرسم، فلو السكربت اتأخر أو اتغيّر المصدر
+     الشاشة بتكتب الرقم الصحيح لنفس البناء اللي اتحمّل. المرجع الوحيد للزيادة هو
+     `window.MIZAN_BUILD` في index.html ⇒ كل نشر بيشيل رقمه معاه لوحده. */
+  const verLabel = () =>
+    (typeof window.mizanVerLabel === "function") ? window.mizanVerLabel() : APP_VERSION;
 
   /* ================== التخزين ================== */
   const LS_CUSTOMERS = "mizan_customers_v1";
@@ -34,14 +41,21 @@
   const LS_ATT_SETTINGS = "mizan_att_settings_v1";
   // 🆕 مهمة 98: سجل الأصول الثابتة (غير المتداولة / غير الملموسة)
   const LS_FIXED_ASSETS = "mizan_fixed_assets_v1";
-  // 🧮 بناء 145: ورق «الجرد بالباركود» — على جهاز العميل بس (مافيش جدول سحابي ومافيش ترقية)
+  /* 🧮 بناء 145 → 146: ورق «الجرد بالباركود» على جهاز العميل بس (مافيش جدول سحابي ومافيش ترقية).
+     ⚠️ المفتاح **بره** `LS_ALL_KEYS` عندنا عمدًا، والسبب مقاس حيًّا (طلب المالك 06/10 ≈23:50:
+     «مش بيحفظ ورقة الجرد»): `guardOrgSwitch()` بينادي `wipeLocalTables()` اللي بتمسح **كل**
+     مفتاح في `LS_ALL_KEYS`، و`showLogin()` بتمسح ختم الحالة (`LS_STATE_ORG`) ⇒ أي **خروج ثم
+     دخول لنفس الشركة** كان بيشيل الورق المحفوظ («حفظتها ولقيتها راحت»).
+     العزل اللي كان سبب المسح ده بقى متحقّق **بالمفتاح نفسه**: كل شركة ليها مفتاح
+     `mizan_sc_sheets_v1:<orgId>` ⇒ ورق شركة ما بيبانشش في شركة تانية أبدًا، ومش محتاج
+    مسحه عند التبديل. المنطق كله في `scOrgKey`/`scSheetsRead`/`scSheetsWrite`. */
   const LS_STOCK_SHEETS = "mizan_sc_sheets_v1";
   // كل مفاتيح البيانات المحلية (مشتركة بين كل الحسابات في نفس المتصفح)
   const LS_ALL_KEYS = [
     LS_CUSTOMERS, LS_TXS, LS_PRODUCTS, LS_ACTIVITY, LS_SALES, LS_TREASURY,
     LS_SUPPLIERS, LS_SUP_TXS, LS_PURCHASES, LS_ACCOUNTS, LS_JOURNAL,
     LS_USERS, LS_VOUCHERS, LS_SALE_RETURNS, LS_PURCHASE_RETURNS, LS_SETTINGS,
-    LS_EMPLOYEES, LS_ATTENDANCE, LS_ATT_SETTINGS, LS_FIXED_ASSETS, LS_STOCK_SHEETS
+    LS_EMPLOYEES, LS_ATTENDANCE, LS_ATT_SETTINGS, LS_FIXED_ASSETS
   ];
   // 🛡 عزل الشركات: أي مفتاح آخر كتبته بيانات شركة معينة
   // (لو دخل حساب من شركة تانية → البيانات القديمة تُمسح قبل التحميل)
@@ -150,9 +164,56 @@
     { id: 5, code: "PRD-005", barcode: "6222012000232", nameAr: "شاي العروسة", nameEn: "El Arosa Tea", category: "مشروبات", unit: "علبة", defaultWarehouse: "المخزن الرئيسي", purchasePrice: 85, weightedAvgCost: 85, salePrice: 95, discountPercent: 3, discountStart: "2026-09-10", discountEnd: "2026-09-20", qty: 12, reorder: 25, isActive: true }
   ];
 
-  const CATEGORIES = ["عام", "ألبان", "مخبوزات", "زيوت", "سكريات", "مشروبات", "معلبات", "عصائر", "منظفات"];
-  const UNITS = ["حبة", "عبوة", "كيس", "علبة", "كارتون", "طبق", "كيلو", "لتر", "زجاجة"];
-  const WAREHOUSES = ["المخزن الرئيسي", "مخزن المنصورة", "مخزن الزقازيق"];
+  /* 🆕 بناء 145 — قرار المالك الحيّ 07/10 بحرفه:
+     «عايزك تضيف افتراضى لكل الشركات الجديدة فى التصنيفات كيلو قطعه دسته كرتونه و تكون فى كل
+     الشركات الجديدة ثابتة لحين اضافه اى تصنيف اخر من طرف المستخدم و مش عايزه يتمسح»
+     «المستودعات مكتوب للشركات الجديدة مستودعين تجريبى بينزلوا افتراضى مع انشاء شركة تقريبا
+     الزقازيق منهم صلح ده» + «امسح المستودعين دول المنصورة و الزقازيق من كل الشركات الموجوده».
+     ⇒ القوائم الافتراضية بقت **حقول نظام** مش بيانات تجريبية:
+       · أربع وحدات محمية (`DEFAULT_UNITS`) تنزل لكل شركة جديدة، واللي يزيد عليها المستخدم يتعدّل
+         ويمسح، لكن دول **ممنوع مسحهم** (في الواجهة وفي الحمولة اللي بترفع للسحابة).
+       · مخزن واحد «المخزن الرئيسي» — «مخزن المنصورة» و«مخزن الزقازيق» اتشالوا من أساس التعريف،
+         فأي شركة جديدة أو شركة محذوف قوائمها مابقاش فيها مستودع وهمي.
+       · التصنيفات الافتراضية = «عام» بس (مافيش أصناف ألبان/مخبوزات تجريبية تفتح مع شركة جديدة).
+     ⚠️ قياس القاعدة الحيّة 07/10: `public.warehouses` = **صفر سطر** في كل الشركات ⇒ الأسماء
+     التجريبية كانت بتيجي من السطر ده في الكود (`warehouseList()` بترجع الثابت لو القائمة
+     المحفوظة فاضية) — مش من القاعدة. */
+  const DEFAULT_UNITS = ["كيلو", "قطعة", "دسته", "كرتونة"];
+  const CATEGORIES = ["عام"];
+  const UNITS = DEFAULT_UNITS.slice();
+  const WAREHOUSES = ["المخزن الرئيسي"];
+  // «ثابتة» = الوحدة دي مش بتتمسح ولا بتمسح نفسها من الحمولة: مطابقة الاسم بعد تنضيف المسافات
+  function isProtectedUnit(n) {
+    const s = String(n || "").trim();
+    return !!s && DEFAULT_UNITS.some((d) => d === s);
+  }
+  // أي قائمة units (محفوظة أو معلّقة أو حمولة هتترفع) لازم تبدأ بالأربع المحمية بلا تكرار
+  function withProtectedUnits(list) {
+    const norm = (u) => (u && typeof u === "object")
+      ? Object.assign({}, u, { name: String(u.name || u.symbol || "").trim() })
+      : { name: String(u || "").trim(), symbol: "" };
+    // 1) تنظيف + إزالة التكرار من المدخول (نفس قرار 145 بالحرف)
+    const rows = [];
+    const seen = new Set();
+    (Array.isArray(list) ? list : []).forEach((u) => {
+      const r = norm(u);
+      if (!r.name || seen.has(r.name)) return;
+      seen.add(r.name);
+      rows.push(r);
+    });
+    // 2) الأربع المحمية أول القائمة — و⚠️ **بسطر المحفوظ نفسه** لو كان موجود (رمزه «ق» وهويته).
+    //    تصحيح 146: نسخة 145 كانت بتحط {name, symbol:""} الأول وتتشاور على السطر المحفوظ
+    //    (`has(d)` بيبقى true) ⇒ أي شركة كاتبهة «قطعة / ق» كان رمزها بيمسح نفسه من السحابة
+    //    أول ما الحفظ يمشي. المنطق ده بيطابق قياس `D:/_work/temp/_pu_probe.js` قبل/بعد.
+    const out = [];
+    DEFAULT_UNITS.forEach((d) => {
+      const hit = rows.find((r) => r.name === d);
+      out.push(hit || { name: d, symbol: "" });
+    });
+    rows.forEach((r) => { if (DEFAULT_UNITS.indexOf(r.name) === -1) out.push(r); });
+    return out;
+  }
+
 
   const seedActivity = [
     { ts: "09:12:44", user: "admin", action: "تسجيل دخول", desc: "دخول مالك الشركة" },
@@ -346,6 +407,11 @@
       saleReturns = []; purchaseReturns = []; employees = []; attendance = [];
       attSettings = defaultAttSettings(); fixedAssets = [];
       scSheets = []; scSheetCur = null;
+      // 🧮 بناء 145: ورق الجرد على القرص **ما اتمسحش** (مفتاحه بره LS_ALL_KEYS عمدًا)، بس
+      // الذاكرة اتفضّت ⇒ لازم «آخر مفتاح قرينا منه» يمسح هو كمان. بدون ده `scResyncOrg()`
+      // تلاقي المفتاح زي ما هو وترجع مصفوفة فاضية، والورق يبان ضايع رغم إنه على الجهاز
+      // («ورقة الجرد مش بتنزل» — نفس الشكوى، مسار مختلف: خروج ودخول **لنفس الشركة**).
+      scLoadedKey = null;
       openingBaseline = null;
       // خريطة معرّفات السحابة بتاعت الشركة السابقة لو فضلت ممكن تُنسب سطر جديد
       // لـ uuid قديم من شركة تانية — تفضى معاهم.
@@ -1006,7 +1072,7 @@
       attendance = [];
       attSettings = defaultAttSettings();
       fixedAssets = [];
-      scSheets = []; scSheetCur = null;
+      scSheets = []; scSheetCur = null; scLoadedKey = null;   // المتصفح رفض القراءة ⇒ أساس الذاكرة راح
       settings = Object.assign({}, defaultSettings);
     }
     // 🛡 بناء 122: ذيل «أثبّت الفاضي على القرص» ما يقعّش الإقلاع. في متصفح بيرفض
@@ -2930,11 +2996,29 @@
   const SCAN_MIN_LEN = 4;
   const SCAN_BURST_CHARS = 3;
   const scanTrace = {};
+  /* ═══ 145: الساعة بتقرأ **وقت وصول الحرف**، مش «وقت ما المعالج فات» ═══
+     القياس الحيّ (كروم، ١٤ صنف مزروع، أول مسحة بعد فتح الفاتورة): أول حرف بيشغّل أول
+     رسم للوحة الاقتراح ⇒ الفارق بين أول معالج وتاني معالج اتقيس **85ms** (وفي الرحلة
+     الكاملة عدّى 90) ⇒ `gap > SCAN_MAX_GAP_MS` ⇒ السلسلة بتبتدي من الحرف التاني ⇒ ذيل
+     المسحة «2000000000114» بقى «000000000114» ⇒ «🔍 ملقتش صنف بالرقم …» والسطر ما ينزلش.
+     دي مش بطء الإسكانر — الماسح بيرمي حروفه كل ~10ms، والمتصفح بيأخّر اللي وراه في
+     الطابور وهو بيرسم الاقتراحات، فالوقت الحقيقي للوصول محفوظ في الحدث نفسه (`event.timeStamp`).
+     الصابع البشري برده بيتقاس من وصول الحرف (فوق 150ms)، فحدّ الأمان 90ms ما اتغيّرش. */
+  function scanArrival(ev) {
+    try {
+      const to = performance && performance.timeOrigin;
+      const ts = ev && ev.timeStamp;
+      if (typeof to === "number" && to > 1e11 && typeof ts === "number" && isFinite(ts) && ts >= 0) return to + ts;
+    } catch (e) { /* متصفح قديم بلا `timeOrigin` ⇒ رجوع لساعة النظام (سلوك 143 بالأحرف) */ }
+    return Date.now();
+  }
   /* ⚠️ تُنادى مع **كل حرف** يدخل الخانة (من مستمع `input`)، مش عند Enter.
      لو نناديها عند Enter بس ⇒ السلسلة ما تتقاسش خالص (streak يفضل 1) والإسكانر
-     يتعامل معاملة الصابع. الدالة دي بتكتب الطابع الزمني وبتعدّ السلسلة. */
-  function scanKey(fieldId) {
-    const now = Date.now();
+     يتعامل معاملة الصابع. الدالة دي بتكتب الطابع الزمني وبتعدّ السلسلة.
+     الوسيط التاني (`ev`) = الحدث اللي جاب الحرف، ومنه بنقرا وقت الوصول؛ ولو اتنادت
+     من غير حدث (اللصق/الماسح البارد) بتقع على ساعة النظام. */
+  function scanKey(fieldId, ev) {
+    const now = scanArrival(ev);
     const t = scanTrace[fieldId];
     const gap = t ? now - t.last : 0;
     scanTrace[fieldId] = { last: now, streak: t && gap >= 0 && gap <= SCAN_MAX_GAP_MS ? t.streak + 1 : 1 };
@@ -4011,6 +4095,8 @@
 
   function productUnits() {
     const list = [];
+    // 🆕 145: الأربع الوحدات الأساسية دايمًا موجودين (شركة جديدة = جاهزة، وممنوع القائمة تفضل فاضية)
+    DEFAULT_UNITS.forEach((d) => { if (list.indexOf(d) === -1) list.push(d); });
     [csetData, ssetData].forEach((src) => {
       if (src && Array.isArray(src.units)) {
         src.units.forEach((u) => {
@@ -4025,7 +4111,9 @@
   function fillUnitSelect(sel, current) {
     const apply = (unitsArr) => {
       const list = [];
-      (unitsArr || []).forEach((u) => {
+      /* 🆕 145: الوحدات المحمية الأربعة بتتنزّل أول حاجة في القائمة ⇒ خانة «الوحدة» في
+         الصنف والفاتورة ما تبqاش فاضية في شركة جديدة (كانت بتعتمد على اللي محفوظ فقط). */
+      withProtectedUnits(unitsArr).forEach((u) => {
         const n = (u && (typeof u === "string" ? u : (u.name || u.symbol))) || u;
         if (n && list.indexOf(n) === -1) list.push(n);
       });
@@ -4440,15 +4528,34 @@
        (٥) **الأصناف اللي ما اتلمستش = قرار سطر-سطر** في نافذة `#mScZero`: ممنوع تصفير
            تلقائي جملي، وممنوع تسريبهم بلا سؤال — اللي ما تتعلّمش عليه صح بيفضل برصيد
            زي ما هو.
-     الورق كله على **جهاز العميل بس** (`LS_STOCK_SHEETS` في `LS_ALL_KEYS` ⇒ بيتمسح مع
-     تبديل الشركة زي باقي بيانات الجهاز): **مافيش جدول `stock_counts` على السحابة
-     ومافيش ترقية ٥١**، وممنوع إدخال المفتاح في `mirror()` أو `pushTable()`.
+     الورق كله على **جهاز العميل بس**: مفتاح `mizan_sc_sheets_v1:<orgId>` (بناء 146 — بره
+     `LS_ALL_KEYS` عمدًا، شوف السبب المقيّس تحت عند التعريف) ⇒ **مافيش جدول `stock_counts` على
+     السحابة ومافيش ترقية ٥١**، وممنوع إدخال المفتاح في `mirror()` أو `pushTable()`.
      ══════════════════════════════════════════════════════════════════════════════ */
 
   /* ---- الورق على الجهاز (مافيش رفع سحابي خالص) ---- */
-  function scSheetsRead() {
+  /* 🔴 باگ حيّ مقاس (06/10 ≈23:50 — «مش بيحفظ ورقة الجرد»): الورق كان على مفتاح عام
+     داخل `LS_ALL_KEYS`، و`guardOrgSwitch()` بيمسح كل مفتاح في القائمة عند أي دخول ختمه
+     مش مطابق — و`showLogin()` بيشيل الختم ⇒ **خروج ودخول لنفس الشركة = الورق راح**.
+     الإصلاح: المفتاح يتقفل **بمعرّف الشركة** (`…:orgId`) ⇒ العزل بقى في اسم المفتاح
+     نفسه، فمفيش سبب يمسحه، وورق شركة ما بيبانش في شركة تانية أبدًا. */
+  let scLoadedKey = null;      // المفتاح اللي آخر قراءة فعلًا جاية منه (null = ما قريانش)
+  function scOrgId() {
     try {
-      const raw = JSON.parse(localStorage.getItem(LS_STOCK_SHEETS));
+      const o = window.DATA && typeof DATA.org === "function" ? DATA.org() : null;
+      if (o && o.id) return String(o.id);
+    } catch (e) { /* DATA لسه ما اتعملهاش init */ }
+    try { const l = localStateOrg(); if (l) return String(l); } catch (e) { /* مافيش ختم */ }
+    return "";
+  }
+  function scOrgKey() {
+    const id = scOrgId();
+    return id ? LS_STOCK_SHEETS + ":" + id : LS_STOCK_SHEETS;
+  }
+  function scSheetsRead() {
+    scLoadedKey = scOrgKey();
+    try {
+      const raw = JSON.parse(localStorage.getItem(scLoadedKey));
       if (!Array.isArray(raw)) return [];
       // ورقة بلا `lines` مصفوفة = كتابة قديمة/تالفة ⇒ تتجاهلها أحسن من شاشة فاضية أو زعلة
       return raw.filter((s) => s && typeof s === "object" && Array.isArray(s.lines));
@@ -4457,10 +4564,23 @@
   // مافيش `pushTable` ومافيش `syncToLocalDisk`: الورقة أداة عدّ على الجهاز ده، مش بيانات شركة.
   function scSheetsWrite() {
     try {
-      localStorage.setItem(LS_STOCK_SHEETS, JSON.stringify(scSheets));
+      scLoadedKey = scOrgKey();
+      localStorage.setItem(scLoadedKey, JSON.stringify(scSheets));
     } catch (e) {
       toast("المتصفح رفض يحفظ الورقة على الجهاز — العدّاد شغال في الذاكرة، بس الورقة ما بتفضلش بعد قفل الصفحة.", "warning");
     }
+  }
+  /* الورق بيتقري وقت `loadData()` (مرة عند الإقلاع/الدخول)، بس المعرّف الحقيقي للشركة
+     ممكن يتعرّف بعد كده أو يتبدّل ⇒ أي نداء لشاشة الجرد لازم يتأكد إن اللي في الذاكرة
+     جاي من **مفتاح الشركة دي**. لو المفتاح مختلف: نعيد القراءة من القرص (ولو لسه ما
+     اتقريتش خالص: نقري أول مرة). بدون ده الزرار «📂 فتح» بيلاقي القائمة فاضية ⇒
+     «ورقة الجرد مش بتنزل» زي ما اشتكى المالك. */
+  function scResyncOrg() {
+    const k = scOrgKey();
+    if (scLoadedKey === k) return false;
+    scSheets = scSheetsRead();
+    scSheetCur = null;
+    return true;
   }
   function scNewNo() {
     let m = 0;
@@ -4487,6 +4607,7 @@
     scSheetsWrite();
   }
   function scCur() {
+    scResyncOrg();   // 🔴 «ورقة الجرد مش بتنزل» (06/10 ≈23:50): الذاكرة لازم تبقى بتاعة الشركة دي
     if (!scSheetCur) scNewSheet();
     return scSheetCur;
   }
@@ -5545,7 +5666,13 @@
     $("#txtPosCode").value = "";
     $("#numPosQty").value = "1";
     $("#txtPosPrice").value = "";
-    posUpdateBadge(prod);
+    /* 🔧 طلب المالك الحيّ 06/10 ≈23:20 (#217 قطعة ٢ — بحرفه: «كمان سعات الكميه الموجوده
+       فى المخزن بتكون معلقه حتى بعد ما ادوس انتر»). الشارة **للمطابقة قبل الإضافة**:
+       بتقول «الرصيد والسعر» عشان البائع يختار صح. أول ما السطر ينزل الجدول، الرقم
+       بقى جوه السطر ⇒ الشارة لازم تمشي، وإلا تضلّ «معلّقة فوق» باسم الصنف اللي قبله.
+       الرجوع لها محترم ومفاجئ: الوقوف بالمؤشر على أي سطر في الجدول بيهّطها تاني
+       (`mouseenter` في `renderPosItems`)، فمافيش معلومة ضاعت — وممنوع إعادة `posUpdateBadge(prod)`. */
+    posUpdateBadge(null);
     renderPosItems();
     posRecalc();
     if (posAddSource === "code") $("#txtPosCode").focus();
@@ -5591,6 +5718,7 @@
     if (!res.prod) {
       lastPosScan = res.code;
       scanBeep("no");
+      posUpdateBadge(null);   // #217/٢: مافيش صنف اتعرّف ⇒ مافيش شارة تضلّ من صنف قبله
       scanHint("#posScanHint", "warn", scanFailText(res) +
         (res.why === "notfound"
           ? " <button type='button' class='scan-act' data-scan-new='1'>➕ سجّله صنف جديد</button>" : ""));
@@ -5632,11 +5760,14 @@
       $("#numPosQty").value = "";
       posQtyTyped = false;
       scanBeep("ok");
+      /* 🔧 طلب المالك الحيّ 06/10 ≈23:45 (بحرفه): «بلاش تكتب دي … والسعر الإجمالي عايزه
+         واضح». ⇒ النص التعليمي («المسحة تنزّل السطر على طول…») اتشال خالص، والرسالة بقت
+         **الرقم نفسه**: سعر الصنف الممسوح + إجمالي الفاتورة بعد السطر ده (من `posRecalc`
+         مصدر الحساب الوحيد، فاللي في الرسالة = اللي في الفوتر حرفيًا). */
+      const tot = posRecalc();
       scanHint("#posScanHint", "ok", "📷 " + esc(p.nameAr || p.code) + " — " +
-        qty + " × " + fmt(price) + " ج.م نزلت في الفاتورة." +
-        (autoQty
-          ? "<span class='scan-sub'>✅ المسحة تنزّل السطر على طول (كمية ١) · زوّدها من خانة الكمية أو امسّح الصنف تاني = +١.</span>"
-          : "<span class='scan-sub'>امسّح الصنف اللي بعده — ينزل على طول كمان.</span>"));
+        qty + " × " + fmt(price) + " = <b class='scan-line-total'>" + fmt(Math.round(qty * price * 100) / 100) + " ج.م</b>" +
+        " · 🧾 إجمالي الفاتورة: <b class='scan-line-total'>" + fmt(tot.grand) + " ج.م</b>");
     } else if (!(have > 0)) {
       scanBeep("no");
       scanHint("#posScanHint", "warn", "📦 الصنف (" + esc(p.nameAr || p.code) +
@@ -5650,11 +5781,24 @@
       scanHint("#posScanHint", "warn", "📦 المتوفر من (" + esc(p.nameAr || p.code) +
         ") في («" + esc(wh) + "») = " + have + " " + esc(p.unit || "") + " — أقل من الكمية اللي طلبتها.");
     }
+    /* #217/٢ — **بوابة واحدة بعد قرار التعارف**: سواء السطر نزل أو اترفض، الرسالة اللي
+       فوق فيها الرقم المطلوب (الإجمالي / المتوفر / السعر)، فالشارة ما تضلّش معلّقة تحت
+       الرأس باسم الصنف الممسوح. (المسار اليدوي بيمسّيها جوه `posAddItem` عند النجاح،
+       و`posOnCode`/`posOnSearch` بيهّطوها تاني وقت المطابقة قبل الإضافة.) */
+    posUpdateBadge(null);
   }
 
   // Enter في خانة الكود: إمّا إنهاء مسح (سريع) ⇒ نختار الصنف، أو إنهاء كتابة ⇒ المسار القديم
+  /* 🔴 باگ حيّ مقاس 06/10 ≈23:55 (بحرفه: «المسح بيتعرّف على الأصناف وبيضيفها وبيخطّي
+     في الرسالة خطأ وبيقول ادخل اسم الصنف»): الإسكانر بيرسل **Enter بعد الحروف**، وفي
+     فئة من الماكينات الرقم بيوصل/ينفّذ قبل الـ Enter ⇒ النجاح بيفرّغ خانة الكود
+     (`posAddItem` سطر 5545) والـ Enter بيجي على **خانة فاضية** ⇒ `posAddVia` ⇒
+     `posAddItem` بتقول «لم يتم العثور على صنف يطابق الاسم أو الكود». الصنف كان نزل
+     فعلًا، والرسالة كدّابة. ⇒ **الخانة الفاضية = مافيش حاجة تتنفّذ** (ممنوع رفض صامت
+     للكتابة الحقيقية: أي حرف في الخانة بيمشي المسار القديم بالحرف). */
   function posCodeEnter() {
     const raw = $("#txtPosCode").value;
+    if (!String(raw || "").trim()) return;
     if (scanBurstOf("txtPosCode", raw)) { posHandleScan(scanTailNorm("txtPosCode")); return; }
     posAddVia("code");
   }
@@ -5662,6 +5806,7 @@
   // الإسكانر بيتوّه أحيانًا على خانة الاسم — بنستقبله هناك بنفس الذكاء
   function posSearchEnter() {
     const raw = $("#txtPosSearch").value;
+    if (!String(raw || "").trim()) return;   // نفس باب الفاتورة فوق: الخانة فاضية ⇒ Enter مالوش موضوع
     if (scanBurstOf("txtPosSearch", raw)) { posHandleScan(scanTailNorm("txtPosSearch")); return; }
     posAddVia("search");
   }
@@ -5830,6 +5975,14 @@
   function coldScanKey(e) {
     if (e.ctrlKey || e.metaKey || e.altKey) return;     // أي اختصار حقيقي مالوش دعوى بالمسح
     const k = e.key;
+    /* 🔴 باگ حيّ مقاس 07/10 (بحرفه: «لما بكتب صنف فى الفاتوره بتطلع الرساله دى» +
+       `TypeError: Cannot read properties of undefined (reading 'length') coldScanKey`):
+       في ماكينات/لوحات (سكانرات وطرق إدخال) بترسل `keydown` **بلا `key` خالص** (بلا `keyCode`
+       بس، أو حدث مولّد من طبقة إدخال) ⇒ السطر اللي بيقرا `k.length` كان بيرمي TypeError
+       على شاشة البائع. الطبقة دي تعنيها **الحروف المقروءة بس** (مسحة الباركود)، فأي حدث
+       مالوش سلسلة حروف = مش مسح ⇒ سيّبه يعدي لمسار الخانة القديم بلا أي تدخل (ممنوع رفض
+       صامت للكتابة الحقيقية: أي حرف فعلي بيمشي زي الأول بالحرف). */
+    if (typeof k !== "string" || !k) return;
     const inv = coldInvoice();
     if (!inv) { if (coldBuf) coldReset(); return; }     // بره الفاتورتين ⇒ الكيبورد صاحبه زي الأول
     if (k === "Enter") {
@@ -5854,7 +6007,7 @@
     }
     if (mode === "capture") { e.preventDefault(); e.stopPropagation(); }
     coldBuf += k;
-    scanKey("cold");
+    scanKey("cold", e);
     coldArmQuiet();
   }
 
@@ -6380,7 +6533,7 @@
     $("#txtPPCode").value = "";
     $("#numPPQty").value = "1";
     $("#txtPPPrice").value = "";
-    ppUpdateBadge(prod);
+    ppUpdateBadge(null);   // #217/٢ — نفس باب البيع: السطر نزل ⇒ الشارة تمشي (الوقوف على السطر يهّطها)
     renderPPItems();
     ppRecalc();
     if (ppAddSource === "code") $("#txtPPCode").focus();
@@ -6399,6 +6552,7 @@
     if (!res.prod) {
       lastPpScan = res.code;
       scanBeep("no");
+      ppUpdateBadge(null);   // #217/٢: مافيش صنف اتعرّف ⇒ مافيش شارة تضلّ من صنف قبله
       scanHint("#ppScanHint", "warn", scanFailText(res) +
         (res.why === "notfound"
           ? " <button type='button' class='scan-act' data-scan-new='1'>➕ سجّله صنف جديد</button>" : ""));
@@ -6430,11 +6584,13 @@
       $("#numPPQty").value = "";
       ppQtyTyped = false;
       scanBeep("ok");
+      /* 🔧 نفس طلب المالك الحيّ 06/10 ≈23:45 في البيع (بحرفه: «بلاش تكتب دي … والسعر
+         الإجمالي عايزه واضح») — والشراء نفس الباب بنفس الرسالة: **الرقم نفسه** بدل النص
+         التعليمي، والإجمالي من `ppRecalc` مصدر الحساب الوحيد. */
+      const tot = ppRecalc();
       scanHint("#ppScanHint", "ok", "📷 " + esc(p.nameAr || p.code) + " — " +
-        qty + " × " + fmt(price) + " ج.م نزلت في فاتورة الشراء." +
-        (autoQty
-          ? "<span class='scan-sub'>✅ المسحة تنزّل السطر على طول (كمية ١) · زوّدها من خانة الكمية أو امسّح الصنف تاني = +١.</span>"
-          : "<span class='scan-sub'>امسّح الصنف اللي بعده — ينزل على طول كمان.</span>"));
+        qty + " × " + fmt(price) + " = <b class='scan-line-total'>" + fmt(Math.round(qty * price * 100) / 100) + " ج.م</b>" +
+        " · 🧾 إجمالي فاتورة الشراء: <b class='scan-line-total'>" + fmt(tot.grand) + " ج.م</b>");
     } else if (!(price > 0)) {
       scanBeep("no");
       scanHint("#ppScanHint", "warn", "🏷️ الصنف (" + esc(p.nameAr || p.code) +
@@ -6444,16 +6600,19 @@
       scanHint("#ppScanHint", "warn", "⚠️ (" + esc(p.nameAr || p.code) +
         ") ما اتضافش — شوف الرسالة اللي فوق وكمّل.");
     }
+    ppUpdateBadge(null);   // #217/٢ — بوابة واحدة بعد قرار التعارف: الشارة ما تضلّش معلّقة
   }
 
   function ppCodeEnter() {
     const raw = $("#txtPPCode").value;
+    if (!String(raw || "").trim()) return;   // نفس باب البيع: Enter على خانة فاضية = مافيش موضوع
     if (scanBurstOf("txtPPCode", raw)) { ppHandleScan(scanTailNorm("txtPPCode")); return; }
     ppAddVia("code");
   }
 
   function ppSearchEnter() {
     const raw = $("#txtPPSearch").value;
+    if (!String(raw || "").trim()) return;
     if (scanBurstOf("txtPPSearch", raw)) { ppHandleScan(scanTailNorm("txtPPSearch")); return; }
     ppAddVia("search");
   }
@@ -10154,9 +10313,12 @@
         else v = esc(v || (f === "is_active" ? "🟢 نشط" : "-"));
         h += "<td>" + v + "</td>";
       });
+      const lockedUnit = key === "units" && isProtectedUnit(r && (r.name || r.symbol));
       h += "<td>" +
         "<button class=\"btn small blue\" type=\"button\" onclick=\"window.__settEdit('" + prefix + "','" + type + "'," + idx + ")\">✏️</button> " +
-        "<button class=\"btn small red\" type=\"button\" onclick=\"window.__settDel('" + prefix + "','" + type + "'," + idx + ")\">🗑️</button>" +
+        (lockedUnit
+          ? "<button class=\"btn small\" type=\"button\" title=\"وحدة أساسية في ميزان — مافيش حذف\" disabled>🔒</button>"
+          : "<button class=\"btn small red\" type=\"button\" onclick=\"window.__settDel('" + prefix + "','" + type + "'," + idx + ")\">🗑️</button>") +
         "</td></tr>";
     });
     if (!rows.length) h += '<tr><td colspan="' + (heads.length + 1) + '">لا توجد بيانات بعد.</td></tr>';
@@ -10249,6 +10411,13 @@
     const list = data[key] || [];
     const rec = list[idx];
     const nm = rec ? (rec.name || "هذا السجل") : "هذا السجل";
+    /* 🆕 145 — «مش عايزه يتمسح» (بحرفه): الأربع وحدات الأساسية ثابتة في كل شركة.
+       بيظهر قفل 🔒 في الجدول بدل زرار الحذف، ولو حد نادى الدالة دي من غير الواجهة
+       refuse هنا كمان — والرسالة ودّية بلا أي اصطلاح تقني. */
+    if (key === "units" && isProtectedUnit(nm)) {
+      toast("«" + nm + "» وحدة أساسية في ميزان ومافيهاش حذف — إضافة وحدات تانية ليك مفتوحة.", "warning");
+      return;
+    }
     if (type === "wallet" || type === "bank") {
       // الرصيد المرجعي: سجل الخزينة المرتبط (المحسوب فعليًا من الحركات) إن وجد،
       // وإلا الرصيد المكتوب في الإعدادات.
@@ -10446,6 +10615,11 @@
     settLoad[prefix] = prefix === "s"
       ? { ok: true, err: "", at: new Date().toISOString(), orgId: orgId || (settLoad.s && settLoad.s.orgId) || null }
       : { ok: true, err: "", at: new Date().toISOString() };
+    /* 🆕 145: الأربع وحدات المحمية بتنضم للقائمة **وقت التحميل** (من السحابة أو من نسخة الجهاز)
+       ⇒ شركة جديدة تلاقي «كيلو/قطعة/دسته/كرتونة» جاهزة، وأي شركة موجودة ما تنقصهاش وحدة منهم.
+       عشان كده الأساس (baseline) بيتحسب **بعد** الضم، فـ«التفريغ» اللي بيطلب تأكيد ما يغلطش
+       بين «اللي الجاي من السحابة» و«اللي إحنا زودناه». */
+    if (payload) payload.units = withProtectedUnits(payload.units);
     const b = {};
     SETT_LIST_KEYS.forEach((k) => { b[k] = Array.isArray(payload && payload[k]) ? payload[k].length : 0; });
     settBaseline[prefix] = b;
@@ -10492,7 +10666,7 @@
       if (!(k in src)) return;
       const v = settSafeList(prefix, k);
       if (v === null) { skipped.push(k); return; }
-      out[k] = v;
+      out[k] = k === "units" ? withProtectedUnits(v) : v;
     });
     return { payload: out, skipped: skipped, noPayload: false };
   }
@@ -10687,7 +10861,7 @@
     settMarkFailed("c", "لا يوجد اتصال بالسحابة");
     csetData = {
       org: { name: settings.orgName || "", phone: settings.orgPhone || "", address: settings.orgAddress || "", tax_number: settings.orgVat || "", org_note: settings.orgNote || "", tax_enabled: !!settings.taxEnabled, tax_rate: Math.round((settings.taxRate || 0) * 100), tax_title: "", paper_size: settings.paperSize || "A4", warranty_terms: settings.orgWarranty || "", invoice_fields: normalizeInvFields(settings.invFields) },
-      categories: [], units: [], warehouses: [], owners: [], wallets: [], banks: []
+      categories: [], units: withProtectedUnits([]), warehouses: [], owners: [], wallets: [], banks: []
     };
     try {
       // الوحدات/القوائم المحفوظة على الجهاز تظهر حتى من غير شبكة (بدل شاشة فاضية)
@@ -10796,7 +10970,7 @@
         toast("تعذّر تحميل «" + ttl + "» من السحابة، فحفظناها على جهازك ومنعنا رفعها عشان ما تُمسحش. اضغط «🔄 تحديث» وبعدين احفظ.", "warning");
         return;
       }
-      payload[paneKey] = list.slice();
+      payload[paneKey] = paneKey === "units" ? withProtectedUnits(list) : list.slice();
     }
     const after = () => {
       if (payload.org) {
@@ -11834,8 +12008,8 @@
     // + الإكمال اليدوي (طلب 05/10 ≈18:20: «كل ما اكتب رقم من الباركود يبحث في المخزون
     // علشان يكمل لى الرقم»): `scanSuggestShow` بترجع false أثناء المسح ⇒ الاقتراح ما
     // يعطّش رسالة الإسكانر ولا يقطع المسح المتتابع.
-    $("#txtPosCode").addEventListener("input", () => {
-      scanKey("txtPosCode");
+    $("#txtPosCode").addEventListener("input", (e) => {
+      scanKey("txtPosCode", e);
       posOnCode();
       scanSuggestShow("#posScanHint", "txtPosCode", $("#txtPosCode").value);
     });
@@ -11845,7 +12019,7 @@
     });
     // 📷 إسكانر بيلصق الرقم دفعة واحدة (فئة من الماكينات + تطبيقات المسح على الموبايل)
     $("#txtPosCode").addEventListener("paste", () => scanPasteRun("txtPosCode", posCodeEnter));
-    $("#txtPosSearch").addEventListener("input", () => { scanKey("txtPosSearch"); posOnSearch(); });
+    $("#txtPosSearch").addEventListener("input", (e) => { scanKey("txtPosSearch", e); posOnSearch(); });
     $("#txtPosSearch").addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); posSearchEnter(); }
     });
@@ -11897,8 +12071,8 @@
     $("#btnScManualAdd").addEventListener("click", scManualAdd);
     $("#scWarehouse").addEventListener("change", () => { renderStockCount(); scShowStock(); });
     // كل حرف من الماسح بيمرّ على `scanKey` ⇒ السلسلة الزمنية بتتقاس أثناء الكتابة (درس 143)
-    $("#txtScCode").addEventListener("input", () => {
-      scanKey("txtScCode");
+    $("#txtScCode").addEventListener("input", (e) => {
+      scanKey("txtScCode", e);
       scanSuggestShow("#scScanHint", "txtScCode", $("#txtScCode").value);
     });
     $("#txtScCode").addEventListener("keydown", (e) => {
@@ -11912,7 +12086,7 @@
       const pk = e.target.closest("[data-scan-pick]");
       if (pk) scanSuggestPick("#scScanHint", "txtScCode", pk.getAttribute("data-scan-pick"), scShowStock);
     });
-    $("#txtScSearch").addEventListener("input", () => { scanKey("txtScSearch"); scShowStock(); });
+    $("#txtScSearch").addEventListener("input", (e) => { scanKey("txtScSearch", e); scShowStock(); });
     $("#txtScSearch").addEventListener("keydown", (e) => {
       if (e.key !== "Enter") return;
       e.preventDefault();
@@ -12001,8 +12175,8 @@
       const firstProd = products.find((p) => p.id === (ppItems[0] && ppItems[0].productId));
       ppUpdateBadge(firstProd || null);
     });
-    $("#txtPPCode").addEventListener("input", () => {
-      scanKey("txtPPCode");
+    $("#txtPPCode").addEventListener("input", (e) => {
+      scanKey("txtPPCode", e);
       ppOnCode();
       scanSuggestShow("#ppScanHint", "txtPPCode", $("#txtPPCode").value);
     });
@@ -12011,7 +12185,7 @@
       if (e.key === "Enter") { e.preventDefault(); ppCodeEnter(); }
     });
     $("#txtPPCode").addEventListener("paste", () => scanPasteRun("txtPPCode", ppCodeEnter));
-    $("#txtPPSearch").addEventListener("input", () => { scanKey("txtPPSearch"); ppOnSearch(); });
+    $("#txtPPSearch").addEventListener("input", (e) => { scanKey("txtPPSearch", e); ppOnSearch(); });
     $("#txtPPSearch").addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); ppSearchEnter(); }
     });
@@ -17212,10 +17386,13 @@ const pwEye = document.getElementById("btnShowPass");
   /* ================== البداية ================== */
   function init() {
     wireTopNav();
+    /* 146: الختم من `verLabel()` = **رقم التحديث** (أمر المالك 07/10 ≈21:36: «ماتكتبش 1.4.1
+       اكتب 146»)، مش من `APP_VERSION` (رقم المنتج). مقاس في كروم الحقيقي: السطحين بياخدوا
+       من نفس مصدر `window.mizanVerLabel()`، وده بيتنفذ **قبل** ختم `index.html` (آخر مكتِب). */
     const fv = document.getElementById("ftrVer");
-    if (fv) fv.textContent = APP_VERSION;
+    if (fv) fv.textContent = verLabel();
     const lv = document.getElementById("loginVer");
-    if (lv) lv.textContent = APP_VERSION;
+    if (lv) lv.textContent = verLabel();
     // 🛡 لقطة وجود مفاتيح localStorage قبل أي تحميل — تُستخدم للاسترجاع
     // الموثوق من ملف الديسك عند فتح البرنامج على origin جديد أو بعد مسح الكاش.
     try {
