@@ -7849,6 +7849,24 @@
       saveVouchers();
       recalculateTreasuryBalances();
       rec.voucherId = v.id;
+
+      // 🆕 إصلاح: رد نقدي لمبيعات = قيد عكسي على حساب العميل (تخفيض رصيده)
+      // عشان كشف حساب العميل يتحدث صح ومايفضلش عليه الدين رغم استرداد القيمة
+      if (isSales && partyId) {
+        const tx = {
+          id: nextTxId(),
+          customerId: partyId,
+          date: date,
+          desc: "مرتجع مبيعات رقم " + no + " — رد نقدي من " + (tr ? tr.name : "الخزينة"),
+          debit: 0,
+          credit: amt
+        };
+        txs.push(tx);
+        recalculateCustomerBalances();
+        saveCustomers();
+        saveTxs();
+        rec.txId = tx.id;
+      }
     } else {
       const desc = "مرتجع " + retWord(isSales) + " رقم " + no + " — خصم من الرصيد";
       let tx;
