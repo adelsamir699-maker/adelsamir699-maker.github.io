@@ -515,6 +515,27 @@
     return lt[name] === true;
   }
 
+  /* ⏳ بناء 149 (سطر ٥) — «لا توجد حركات» الكذّابة:
+     `journal_entries` و`journal_lines` جوه LAZY (`data.js:25`) وبينزلوا في `loadLazyAll`
+     (`cloud.js:974`). أي شاشة قيود تتفتح قبل ما السحب يخلص (أو على جهاز مالوش لقطة محلية)
+     كانت تلاقي `journalEntries` فاضي وتقول للمشترى «لا توجد قيود بعد» — وهو كلام غلط،
+     وجزء من إحساسه «الحسابات مش بتترحل».
+     البوابة: لسه ما نزلتش ⇒ ما فيش حكم. الشاشة تعرض «لسه بتنزل…» وتعيد رسم نفسها
+     لوحدها لما البيانات توصل فعلًا (mizanOnLazyReady بتتنادى بعد adoptCloud). */
+  let lazyWaitingScreens = {};
+  function jrnStillLoading() { return !!A.online && !bigDataLoaded("journal_entries"); }
+  function lazyHold(key) { lazyWaitingScreens[key] = true; }
+  function lazyRelease(key) { delete lazyWaitingScreens[key]; }
+  const JRN_WAIT_TEXT = "⏳ قيودك لسه بتنزل من السحابة… هتظهر هنا نفسها لحظة ما توصل.";
+  function mizanOnLazyReady() {
+    const keys = Object.keys(lazyWaitingScreens);
+    lazyWaitingScreens = {};
+    if (!keys.length) return;
+    if (keys.indexOf("journal") >= 0) { try { renderJournal(); renderLedger(); } catch (e) { } }
+    if (keys.indexOf("accStatement") >= 0) { try { renderAccStatementView(); } catch (e) { } }
+  }
+  window.mizanOnLazyReady = mizanOnLazyReady;
+
   function recalculateCustomerBalances() {
     ensureCashEntities();
     if (!customers || !txs) return false;
@@ -2509,7 +2530,7 @@
       syncTreasuryItemToSett(tr);
     }
     const txId = nextTxId();
-    txs.push({
+    const txRow = {
       id: txId,
       customerId: cid,
       treasuryId: tr ? tr.id : (trId || null),
@@ -2518,7 +2539,8 @@
       desc: notes,
       debit: 0,
       credit: amount
-    });
+    };
+    txs.push(txRow);
     vouchers.push({
       id: vouchers.reduce((m, x) => Math.max(m, x.id), 0) + 1,
       type: "in",
@@ -2532,6 +2554,8 @@
     saveCustomers();
     saveTxs();
     saveVouchers();
+    // 🆕 بناء 149 (سطر ١): التحصيل يترحّل لقيد — مدين النقدية/البنك/المحفظة، دائن «مديونيات العملاء»
+    postPartyTxJournal("cust", txRow, tr, cust ? cust.nameAr : "");
     hideModal("mPayDebt");
     addActivity("تحصيل مديونية", "تحصيل مبلغ " + fmt(amount) + " ج.م من " + (cust ? cust.nameAr : "") + (tr ? " (" + tr.name + ")" : ""));
     toast("تم تسجيل السداد بنجاح وتحديث رصيد الحساب.", "success");
@@ -2788,6 +2812,8 @@
     const vBefore = vouchers.length;
     vouchers = vouchers.filter((v) => !(v.refType === (isSup ? "supplier_tx" : "customer_tx") && Number(v.refId) === Number(tx.id)));
     pool.splice(idx, 1);
+    // 🆕 بناء 149 (سطر ١): حذف الحركة بيرجع قيدها كمان — تراجع كامل بنفس عرف الفاتورة (بناء 134)
+    const jRemoved = removePartyTxJournal(isSup ? "supp" : "cust", tx.id);
     if (isSup) {
       recalculateSupplierBalances();
       addActivity("حذف حركة مورد", "حذف حركة " + tx.desc + " — " + fmt(amount) + " ج.م (" + partyName + ")");
@@ -2801,7 +2827,8 @@
     else { saveTxs(); saveVouchers(); saveCustomers(); }
     saveTreasury();
     toast("تم حذف الحركة — " + fmt(amount) + " ج.م رجع لـ«" + (accName || "الحساب") + "»." +
-      (vBefore !== vouchers.length ? " والسند المرتبط اتشال معاه." : ""), "success");
+      (vBefore !== vouchers.length ? " والسند المرتبط اتشال معاه." : "") +
+      (jRemoved ? " والقيد المرتبط اتراجع." : ""), "success");
     // تحديث الشاشات المفتوحة
     try { if (statementCtx) refreshStatementView(); } catch (e) { }
     try { if (isSup) renderSuppliers(); else renderTable(); } catch (e) { }
@@ -7198,7 +7225,7 @@
       syncTreasuryItemToSett(tr);
     }
     const txId = supplierTxs.reduce((m, x) => Math.max(m, x.id), 0) + 1;
-    supplierTxs.push({
+    const txRow = {
       id: txId,
       supplierId: sid,
       treasuryId: tr ? tr.id : (trId || null),
@@ -7207,7 +7234,8 @@
       desc: $("#psNotes").value.trim() || "سداد مستحقات مورد",
       debit: 0,
       credit: amount
-    });
+    };
+    supplierTxs.push(txRow);
     vouchers.push({
       id: vouchers.reduce((m, x) => Math.max(m, x.id), 0) + 1,
       type: "out",
@@ -7221,6 +7249,8 @@
     saveSuppliers();
     saveSupplierTxs();
     saveVouchers();
+    // 🆕 بناء 149 (سطر ١): السداد يترحّل لقيد — مدين «مستحقات الموردين»، دائن النقدية/البنك/المحفظة
+    postPartyTxJournal("supp", txRow, tr, supp ? supp.nameAr : "");
     hideModal("mPaySuppDebt");
     addActivity("سداد مورد", "سداد مستحقات " + supp.nameAr + " بمبلغ " + fmt(amount) + " ج.م" + (tr ? " من " + tr.name : ""));
     toast("تم تسجيل السداد بنجاح وتحديث رصيد الحساب.", "success");
@@ -7233,6 +7263,39 @@
   // صلاحية حذف الفواتير: حساب صاحب الشركة + حساب مالك البرنامج (سوبر أدمن) فقط —
   // الحسابات الفرعية للأعضاء ما بيشفوش الزرار ولا يقدروا يستدعوا الحذف.
   function canDeleteInvoices() { return isCompanyOwnerAcct() || isSuperAcct(); }
+
+  /* 🆕 سطر ٢ من طلب المالك (09/10): «بالنسبة للاستعلام عن الفواتير خلال فترة محددة من و الى
+   * يتكتب بنفس الطريقة السابقة مجموع الفواتير بناءا على الفرز».
+   * «بالطريقة السابقة» = نمط بناء 148 بالحرف: **مصدر واحد** (`invQueryTotals`) يقرا
+   * **القائمة المفلترة** (بعد «من/إلى» + بعد البحث) مش القائمة الكاملة، ومنه يتغذي سطر
+   * المجاميع. مافيش هنا «رصيد مرحّل» لأن الفواتير ما ليهاش مرحّل ⇒ الفرق الوحيد عن
+   * `stmPeriodTotals` إن كل حاجة بتتحسب من اللي ظهر فعلاً.
+   * ممنوع: أي مجموع من `sales`/`purchases` كلها، وممنوع أي رقم متكتب باليد في الـ HTML. */
+  function invQueryTotals(list) {
+    const rows = (list || []).filter(Boolean);
+    let total = 0, cash = 0, ajal = 0, tax = 0;
+    rows.forEach((inv) => {
+      const g = round2(inv.grandTotal);
+      total += g;
+      tax += round2(inv.taxAmount);
+      if (String(inv.paymentMethod || "") === "آجل") ajal += g; else cash += g;
+    });
+    return { count: rows.length, total: round2(total), cash: round2(cash), ajal: round2(ajal), tax: round2(tax) };
+  }
+  function invQueryTotalsText(t) {
+    if (!t || !t.count) return "لا توجد فواتير في هذا الفرز — المجموع 0.00 ج.م";
+    return "الفواتير الظاهرة: " + t.count + " · مجموعها: " + fmt(t.total) + " ج.م · نقدًا: " + fmt(t.cash) +
+      " · آجل: " + fmt(t.ajal) + (t.tax > 0 ? " · الضريبة: " + fmt(t.tax) + " ج.م" : "");
+  }
+  function renderInvQueryTotals(selId, list) {
+    const el = $(selId);
+    if (!el) return null;
+    const t = invQueryTotals(list);
+    el.textContent = invQueryTotalsText(t);
+    el.hidden = false;
+    el.className = "inv-q-tots" + (t.count ? "" : " inv-q-empty");
+    return t;
+  }
 
   function renderInvoiceQuery() {
     const fromS = $("#dtpFromS").value || "2000-01-01";
@@ -7278,8 +7341,14 @@
       return normalizeAr(inv.invoiceNumber).includes(q) || normalizeAr(name).includes(q) || normalizeAr(inv.paymentMethod).includes(q) || fmt(inv.grandTotal).includes(q);
     };
 
-    fill($("#dgvInvS tbody"), sales.filter((i) => inRange(i.invoiceDate || i.date, fromS, toS)).filter((i) => match(i, qs, i.customerName || i.customer)), true);
-    fill($("#dgvInvP tbody"), purchases.filter((i) => inRange(i.invoiceDate || i.date, fromP, toP)).filter((i) => match(i, qp, i.supplierName || i.supplier)), false);
+    // 🆕 القائمة تُبنى **مرة واحدة** وتُستخدم للسطين: الجدول وسطر المجاميع ⇒ المستحيل
+    //       المجموع يتجاهل الفرز (شكوى المالك). أي تغيير في الفلتر = نفس الكائن للاتنين.
+    const listS = sales.filter((i) => inRange(i.invoiceDate || i.date, fromS, toS)).filter((i) => match(i, qs, i.customerName || i.customer));
+    const listP = purchases.filter((i) => inRange(i.invoiceDate || i.date, fromP, toP)).filter((i) => match(i, qp, i.supplierName || i.supplier));
+    fill($("#dgvInvS tbody"), listS, true);
+    fill($("#dgvInvP tbody"), listP, false);
+    renderInvQueryTotals("#invTotS", listS);
+    renderInvQueryTotals("#invTotP", listP);
   }
 
   // حذف فاتورة (بيع/شراء) بتراجع كامل: المخزون + أثر الدفع (خزينة أو أرصدة وقيود) + السطر نفسه.
@@ -7930,6 +7999,9 @@
       rec.txId = tx.id;
     }
 
+    // 🆕 بناء 149 (سطر ٣): المرتجع يترحّل بقيد عكسي — نفس أطراف فاتورته ونسبة ضريبتها بالحرف
+    postReturnJournal(isSales ? "sale" : "purchase", rec, inv, tr);
+
     // 3) الحفظ + التسلسل + سجل النشاط
     retList(isSales).push(rec);
     if (isSales) saveSaleReturns(); else savePurchaseReturns();
@@ -8008,6 +8080,10 @@
       saveSuppliers();
       saveSupplierTxs();
     }
+    // 🆕 بناء 149 (سطر ٣): حذف المرتجع بيرجع قيده هو كمان (تراجع كامل — نفس عرف الفاتورة)
+    const retJrnRemoved = removeReturnJournal(isSales ? "sale" : "purchase", r.id);
+    if (retJrnRemoved) { renderJournal(); renderLedger(); }
+
     // 3) حذف السطر نفسه
     if (isSales) { saleReturns = saleReturns.filter((x) => x.id !== r.id); saveSaleReturns(); }
     else { purchaseReturns = purchaseReturns.filter((x) => x.id !== r.id); savePurchaseReturns(); }
@@ -8343,6 +8419,7 @@
     fillTreasurySelect("#vTreasury"); // 🆕 بناء 118: الأرصدة تبان في القائمة (النقدية أولًا) بدل اسم بس
     $("#vDate").value = todayISO();
     $("#vAmount").value = "";
+    fillVoucherAccSelect(mode); // 🆕 بناء 149 (سطر ٢): الحساب المقابل — أطراف الدليل بس
     $("#vDesc").value = mode === "in" ? "إيراد (سند قبض)" : "مصروف (سند صرف)";
     $("#vHint").textContent = mode === "in"
       ? "✅ المبلغ هينزل في الحساب اللي هتختاره، والرصيد بيتحدّث تلقائيًا."
@@ -8376,17 +8453,20 @@
     }
     const sign = voucherMode === "in" ? 1 : -1;
     t.balance = round2(t.balance + sign * amount);
-    vouchers.push({
+    const vRow = {
       id: vouchers.reduce((m, x) => Math.max(m, x.id), 0) + 1,
       type: voucherMode,
       treasuryId: tid,
       date: $("#vDate").value || todayISO(),
       amount: Math.round(amount * 100) / 100,
       desc: $("#vDesc").value.trim() || (voucherMode === "in" ? "إيراد" : "مصروف")
-    });
+    };
+    vouchers.push(vRow);
     saveTreasury();
     syncTreasuryItemToSett(t);
     saveVouchers();
+    // 🆕 بناء 149 (سطر ٢): السند يترحّل لقيد بالحساب المقابل المختار (بلا اختيار = بلا قيد)
+    postVoucherJournal(vRow, t, chosenVoucherAcc());
     hideModal("mVoucher");
     addActivity(voucherMode === "in" ? "سند قبض" : "سند صرف", (voucherMode === "in" ? "قبض إيراد" : "صرف مصروف") + " بمبلغ " + fmt(amount) + " ج.م (" + t.name + ")");
     toast("تم حفظ السند بنجاح.", "success");
@@ -8517,6 +8597,13 @@
   function renderJournal() {
     const tbody = $("#dgvJournal tbody");
     tbody.innerHTML = "";
+    // 🆕 بناء 149 (سطر ٥): الفاضي هنا مش دليل على «مافيش قيود» — يمكن لسه بتنزل
+    if (jrnStillLoading()) {
+      lazyHold("journal");
+      tbody.innerHTML = '<tr><td colspan="7">' + JRN_WAIT_TEXT + '</td></tr>';
+      return;
+    }
+    lazyRelease("journal");
     const q = normalizeAr($("#txtJournalSearch").value);
     const list = journalEntries.filter((j) => {
       if (!q) return true;
@@ -8739,15 +8826,24 @@
   }
 
   // خزينة → حساب الدليل المقابل (نقدية 1.1.1 / بنك 1.1.2 / محفظة 1.1.3) مع احتياطي بالاسم ثم بالنقدية
+  // 🆕 بناء 149 (سطر ٤): في الأدلة بلا نقاط الكود يبقى 111/112/113، وكان الاحتياطي بالاسم
+  // مشروطًا بـ Number(parentId) !== 0 — و parent_id في الشركات كلها null ⇒ Number(null)===0 ⇒
+  // الاحتياطي كان ميت ⇒ الدالة بترجع null ⇒ invoiceJrnPlan يرد {error:"cash"} ⇒ **الترحيل بيتلغى**.
+  // الإصلاح: الكود بالحرف ⇒ نسخة الكود بلا نقاط ⇒ بالاسم (بلا شرط parentId) ⇒ النقدية.
   function accForTreasuryAcc(t) {
     const byCode = { cash: "1.1.1", bank: "1.1.2", wallet: "1.1.3" };
     const byName = { cash: "صناديق", bank: "البنوك", wallet: "المحافظ" };
     const key = t && byCode[t.type] ? t.type : "cash";
     let a = accounts.find((x) => String(x.code) === byCode[key] && x.isActive);
     if (a) return a;
-    a = accounts.find((x) => x.type === "asset" && Number(x.parentId) !== 0 && x.isActive && (x.nameAr || "").includes(byName[key]));
+    const bare = byCode[key].replace(/\./g, "");
+    a = accounts.find((x) => x && x.isActive && String(x.code || "").replace(/\./g, "") === bare);
     if (a) return a;
-    return accounts.find((x) => String(x.code) === "1.1.1" && x.isActive) || null;
+    a = accounts.find((x) => x.type === "asset" && x.isActive && (x.nameAr || "").includes(byName[key]));
+    if (a) return a;
+    a = accounts.find((x) => String(x.code) === "1.1.1" && x.isActive);
+    if (a) return a;
+    return accounts.find((x) => x && x.isActive && String(x.code || "") === "111") || null;
   }
 
   // قائمة خزائن بملصق الرصيد، والنقدية أولًا (المفضل) ثم البنوك فالمحافظ
@@ -9121,9 +9217,34 @@
       (j.refType === ref || j.ref === ref)) || null;
   }
   // حساب بالدليل من كوده، وباحتياطي بالاسم لو الشركة عدّلت الكود
+  // 🆕 بناء 149 (سطر ٤): فيه أدلة شركات بلا نقاط خالص (111/115/132…) من زرع السحابة،
+  // و«الحسابات اللي الشركة ممكن تنشئها» بتفضل بنفس الأسماء ⇒ الكود بيُقرأ بالحرف،
+  // ثم بنسخة الكود من غير نقاط، ثم بمرادف الدليل بلا نقاط، وفي الآخر بالاسم.
+  // الدالة self-contained (بلا مساعدات جديدة) عشان حراس 118/95/134 ما يحتاجوش حقن حاجة زيادة.
   function accByCode(code, nameHint) {
     let a = accounts.find((x) => String(x.code) === String(code) && x.isActive !== false);
     if (a) return a;
+    // (ب) نفس الكود من غير نقاط — في الأدلة اللي مالهاش نقاط
+    const bare = String(code == null ? "" : code).replace(/\./g, "");
+    if (bare) {
+      a = accounts.find((x) => x && x.isActive !== false && String(x.code || "").indexOf(".") < 0 && String(x.code) === bare);
+      if (a) return a;
+    }
+    // (ج) مرادفات معروفة للأدلة بلا نقاط (ترقيم السحابة: 13=الالتزامات، 132=مستحقات الموردين، 21=إيرادات المبيعات)
+    //     بتشتغل في الدليل اللي مافيهوش أي نقطة خالص، عشان ما تخمش حساب في دليل بالنقاط
+    const dotFree = accounts.length > 0 && !accounts.some((x) => x && String(x.code || "").indexOf(".") >= 0);
+    const ALIAS = dotFree ? {
+      "1.1": ["11"], "1.1.1": ["111"], "1.1.2": ["112"], "1.1.3": ["113"], "1.1.4": ["114"], "1.1.5": ["115"],
+      "2.1": ["131"], "2.1.1": ["132"], "2.1.2": ["133"],
+      "3.1": ["141"], "3.2": ["142"], "4.1": ["21"], "5.1": ["31"]
+    } : {};
+    const al = ALIAS[String(code)];
+    if (al) {
+      for (let i = 0; i < al.length; i++) {
+        a = accounts.find((x) => x && x.isActive !== false && String(x.code) === al[i]);
+        if (a) return a;
+      }
+    }
     if (nameHint) a = accounts.find((x) => x.isActive !== false && String(x.nameAr || "").indexOf(nameHint) >= 0);
     return a || null;
   }
@@ -9238,6 +9359,323 @@
     return j;
   }
 
+  /* ================== 🆕 بناء 149 — سطر ١ من «مراجعة-ترحيل-الحسابات-08-10.md» §٩ ==================
+     **التحصيل من عميل والسداد لمورد ما كانلهمش أي قيد خالص** (مقياس: `1.1.5 مديونيات العملاء` و
+     `2.1.1 مستحقات الموردين` عليهما **صفر أسطر** في كل السحابة) ⇒ الذمة تفضل دائنة للأبد،
+     وكشف حساب الحسابات ما بيوصلش للصفر، والرصيد ما بيتطابقش مع قائمة المركز المالي.
+     المقطع ده بيضيف ترحيل لحظي بنفس عرف بناء 134 بالحرف:
+       • تحصيل: مدين «الصندوق/البنك/المحفظة» (`accForTreasuryAcc`) · دائن `1.1.5`
+       • سداد:  مدين `2.1.1` · دائن «الصندوق/البنك/المحفظة»
+       • **منع التكرار** بمفتاح `refId` = «CT:» أو «ST:» + id الحركة (الحركة مالهاش رقم فواتير،
+         و`id` تسلسلي لكل شركة وبيترفع للسحابة ⇒ جهاز تاني ما يرحّش نفس الحركة)
+       • **تراجع كامل** عند حذف الحركة (`window.__stmDelTx`) بنفس نمط `removeInvoiceJournal`
+       • **الفاتورة/الحركة ما تلغيش لو الترحيل تعثّر**: رسالة ودّية باسم الحساب الناقص
+         (نفس `invoiceJrnMissText` — مصدر واحد، وممنوع أي مصطلح تقني للعميل)
+     **بلا ترحيل بأثر رجعي:** الحركات اللي قبل المقطع ده ما تتلمسش — الترحيل بيحصل لحظة
+     تسجيل الحركة الجديدة وبس (كتابة البيانات القديمة على السحابة محتاجة أمر المالك الحرفي لوحده).
+     **ممنوع** أن يتنادى على حركة «فاتورة آجلة» (`debit>0` في `txs` / `supplierTxs`) ولا «رصيد
+     افتتاحي» — دول بيترحلوا في مسارهم الخاص، والنداء المزدوج = المبلغ بيتعدّى مرتين (درس 147). */
+  const PARTY_JRN = {
+    cust: { ref: "تحصيل من عميل", prefix: "CT:", dueCode: "1.1.5", dueName: "مديونيات العملاء" },
+    supp: { ref: "سداد لمورد", prefix: "ST:", dueCode: "2.1.1", dueName: "مستحقات الموردين" }
+  };
+  function partyJrnKey(kind, txId) {
+    const cfg = PARTY_JRN[kind];
+    const id = Number(txId);
+    return (cfg && id > 0) ? cfg.prefix + id : "";
+  }
+  function partyJrnOf(kind, txId) {
+    const key = partyJrnKey(kind, txId);
+    if (!key) return null;
+    const ref = PARTY_JRN[kind].ref;
+    return journalEntries.find((j) => j && String(j.refId || "") === key &&
+      (j.refType === ref || j.ref === ref)) || null;
+  }
+  // الحركة نفسها بتجيب المبلغ والتاريخ: التحصيل والسداد بيتسجلوا credit في حركة الطرف
+  function partyTxAmountOf(tx) {
+    return tx ? round2(Number(tx.credit) || 0) : 0;
+  }
+  function partyJrnPlan(kind, tr, amount) {
+    const amt = round2(amount);
+    if (!(amt > 0)) return { error: "amount" };
+    const cfg = PARTY_JRN[kind];
+    const cashAcc = accForTreasuryAcc(tr);
+    if (!cashAcc) return { error: "cash" };
+    const dueAcc = accByCode(cfg.dueCode, cfg.dueName);
+    if (!dueAcc) return { error: cfg.dueCode };
+    const lines = kind === "cust"
+      ? [{ accountId: Number(cashAcc.id), debit: amt, credit: 0 }, { accountId: Number(dueAcc.id), debit: 0, credit: amt }]
+      : [{ accountId: Number(dueAcc.id), debit: amt, credit: 0 }, { accountId: Number(cashAcc.id), debit: 0, credit: amt }];
+    const d = round2(lines.reduce((m, l) => m + (Number(l.debit) || 0), 0));
+    const c = round2(lines.reduce((m, l) => m + (Number(l.credit) || 0), 0));
+    if (Math.abs(d - c) > 0.01) return { error: "unbalanced" };
+    return { lines: lines, debit: d, credit: c, cashAcc: cashAcc, dueAcc: dueAcc };
+  }
+  function postPartyTxJournal(kind, tx, tr, partyName) {
+    const cfg = PARTY_JRN[kind];
+    if (!cfg || !tx) return null;
+    const amount = partyTxAmountOf(tx);
+    if (!(amount > 0)) return null;                      // حركة آجلة/افتتاحية/غير سداد — برّه المقطع
+    const done = partyJrnOf(kind, tx.id);
+    if (done) return { j: done, already: true };
+    const plan = partyJrnPlan(kind, tr, amount);
+    if (plan.error) {
+      toast("الحركة اتسجّلت تمام. الترحيل التلقائي للقيود ما كملش لأن " +
+        invoiceJrnMissText(plan.error) + " — ضيفه من شاشة الحسابات وبعدها سجّل القيد من «القيود اليومية».", "warning");
+      return null;
+    }
+    const j = {
+      id: nextJournalId(),
+      number: "JRN-" + String(journalEntries.length + 1).padStart(4, "0"),
+      date: tx.date || todayISO(),
+      desc: cfg.ref + (partyName ? ": " + partyName : "") + " — " + fmt(amount) + " ج.م",
+      ref: cfg.ref,
+      refType: cfg.ref,
+      refId: partyJrnKey(kind, tx.id),
+      debit: plan.debit,
+      credit: plan.credit,
+      lines: plan.lines
+    };
+    settleJrnLines(j.lines, 1);
+    journalEntries.push(j);
+    persistJournal();
+    saveAccounts();
+    try { renderJournal(); } catch (e) { }
+    return { j: j, already: false };
+  }
+  // حذف الحركة = تراجع قيدها كمان (نفسعرف removeInvoiceJournal: تسوية −1 ثم إسقاط ثم حفظ)
+  function removePartyTxJournal(kind, txId) {
+    const j = partyJrnOf(kind, txId);
+    if (!j) return null;
+    settleJrnLines(j.lines, -1);
+    const i = journalEntries.findIndex((x) => x === j);
+    if (i >= 0) journalEntries.splice(i, 1);
+    JRN_ID_FLOOR = Math.max(JRN_ID_FLOOR, Number(j.id) || 0);
+    persistJournal();
+    saveAccounts();
+    try { renderJournal(); } catch (e) { }
+    return j;
+  }
+
+  /* ================== 🆕 بناء 149 — سطر ٢ من الخطة: سند القبض/الصرف يترحّل لقيد ==================
+     «سند قبض/صرف» (نافذة `#mVoucher`) كان بيلمس **الخزينة والسند بس** ⇒ الحساب المقابل
+     (إيراد/مصروف) خارج الدليل خالص (مقياس: 21 سندًا على السحابة بصفر قيود).
+     المقطع ده بيزود **الحساب المقابل** في النافذة (`#vAcc`) وبيرحّل:
+       • قبض: مدين «الصندوق/البنك/المحفظة» · دائن الحساب المختار
+       • صرف: مدين الحساب المختار · دائن «الصندوق/البنك/المحفظة»
+     **بلا اختراع:** القائمة بتعرض **أطراف الدليل** بس (`voucherAccChoices`) — الإيراد للقبض
+     والمصروف للصرف، ولو الشركة مالهاش بنود من النوع ده القائمة بتعرض كل الأطراف. الاختيار
+     المسبق = أول حساب في القائمة **ظاهر ومقاس**، والبائع يغيّره لو عايز. لو مافيش أي طرف في
+     الدليل ⇒ السند يتحفظ زي الأول **بلا قيد** وبلا أي رقم متخيّل.
+     **ممنوع ازدواج:** سندات «تسجيل مصروفات/إيرادات» (`saveSimpleEntry`) ليها قيودها بالفعل،
+     وسندات التحصيل/السداد ليها قيودها من سطر ١ — المقطع ده بيشتغل من `saveVoucher` وبس،
+     ومفتاح `refId` = «VC:» + id السند يمنع أي إعادة ترحيل. */
+  // 🆕 بناء 149 (سطر ٤ تكملة): في الأدلة بلا نقاط `parent_id = null` لكل الحسابات
+  // (قياس على الشركات السبعة)، فالحرس القديم على parentId وحده كان بيعدّ **كل** حساب طرف ⇒
+  // قائمة السند كانت تعرض الأب («2 الإيرادات») جنب الابن («21 إيرادات المبيعات»)، ولو اختاره
+  // البائع القيد بينزل على حساب مجمّع. نفس مصدر الفروع اللي بتستخدمه الكشوف: acsGroupAccounts.
+  function jrnAccLeaf(a) {
+    return !!a && a.isActive !== false && acsGroupAccounts(a).length <= 1;
+  }
+  function voucherAccChoices(mode) {
+    const side = mode === "in" ? "revenue" : "expense";
+    const leaves = accounts.filter(jrnAccLeaf);
+    const typed = leaves.filter((a) => a.type === side);
+    return (typed.length ? typed : leaves)
+      .slice()
+      .sort((a, b) => String(a.code).localeCompare(String(b.code), "en"));
+  }
+  function fillVoucherAccSelect(mode) {
+    const el = $("#vAcc");
+    if (!el) return 0;
+    el.innerHTML = "";
+    const list = voucherAccChoices(mode);
+    const ph = document.createElement("option");
+    ph.value = "";
+    ph.textContent = list.length ? "— اختار الحساب المقابل —" : "— مافيش حسابات في الدليل —";
+    el.appendChild(ph);
+    list.forEach((a) => {
+      const o = document.createElement("option");
+      o.value = String(a.id);
+      o.textContent = String(a.code) + " · " + (a.nameAr || "");
+      el.appendChild(o);
+    });
+    // الاختيار المسبق: أول حساب في القائمة (ظاهر على الشاشة ومقاس) — بلا أي حساب متخيّل
+    if (list.length) el.value = String(list[0].id);
+    return list.length;
+  }
+  function chosenVoucherAcc() {
+    const el = $("#vAcc");
+    const id = el ? parseInt(el.value, 10) : 0;
+    if (!id) return null;
+    return accounts.find((a) => Number(a.id) === id && a.isActive !== false) || null;
+  }
+  function voucherJrnKey(vId) {
+    const id = Number(vId);
+    return id > 0 ? "VC:" + id : "";
+  }
+  function voucherJrnRef(type) { return type === "in" ? "سند قبض" : "سند صرف"; }
+  function voucherJrnOf(vId) {
+    const key = voucherJrnKey(vId);
+    if (!key) return null;
+    return journalEntries.find((j) => j && String(j.refId || "") === key) || null;
+  }
+  function voucherJrnPlan(type, cashAcc, otherAcc, amount) {
+    const amt = round2(amount);
+    if (!(amt > 0)) return { error: "amount" };
+    if (!cashAcc) return { error: "cash" };
+    if (!otherAcc) return { error: "acc" };
+    const lines = type === "in"
+      ? [{ accountId: Number(cashAcc.id), debit: amt, credit: 0 }, { accountId: Number(otherAcc.id), debit: 0, credit: amt }]
+      : [{ accountId: Number(otherAcc.id), debit: amt, credit: 0 }, { accountId: Number(cashAcc.id), debit: 0, credit: amt }];
+    const d = round2(lines.reduce((m, l) => m + (Number(l.debit) || 0), 0));
+    const c = round2(lines.reduce((m, l) => m + (Number(l.credit) || 0), 0));
+    if (Math.abs(d - c) > 0.01) return { error: "unbalanced" };
+    return { lines: lines, debit: d, credit: c };
+  }
+  function postVoucherJournal(v, t, otherAcc) {
+    if (!v || !v.id) return null;
+    const done = voucherJrnOf(v.id);
+    if (done) return { j: done, already: true };
+    const amount = round2(v.amount);
+    if (!(amount > 0)) return null;
+    const cashAcc = accForTreasuryAcc(t);
+    // طرف واحد بس (حساب الخزينة نفسه) أو مافيش طرف تاني ⇒ بلا قيد: ممنوع رقم متخيّل
+    if (!otherAcc || Number(otherAcc.id) === Number(cashAcc && cashAcc.id)) return null;
+    const plan = voucherJrnPlan(v.type, cashAcc, otherAcc, amount);
+    if (plan.error) {
+      toast("السند اتحفظ تمام. الترحيل التلقائي للقيود ما كملش لأن " +
+        invoiceJrnMissText(plan.error) + " — ضيفه من شاشة الحسابات وبعدها سجّل القيد من «القيود اليومية».", "warning");
+      return null;
+    }
+    const ref = voucherJrnRef(v.type);
+    const j = {
+      id: nextJournalId(),
+      number: "JRN-" + String(journalEntries.length + 1).padStart(4, "0"),
+      date: v.date || todayISO(),
+      desc: ref + " — " + (v.desc || "") + " — " + fmt(amount) + " ج.م",
+      ref: ref,
+      refType: ref,
+      refId: voucherJrnKey(v.id),
+      debit: plan.debit,
+      credit: plan.credit,
+      lines: plan.lines
+    };
+    settleJrnLines(j.lines, 1);
+    journalEntries.push(j);
+    persistJournal();
+    saveAccounts();
+    try { renderJournal(); } catch (e) { }
+    return { j: j, already: false };
+  }
+
+  /* ================== 🆕 بناء 149 — سطر ٣ من الخطة: المرتجع يترحّل بقيد عكسي ==================
+     مرتجع البيع/الشراء كان بيلمس **المخزون + السند أو حركة الحساب** وبلا أي قيد (مقياس:
+     7 مرتجعات بيع + 1 شراء = صفر قيود) ⇒ الإيراد والمخزون ما بيرجعوش في الدليل، فرصيد
+     «4.1/21» و«1.1.4/114» بيتقدّم عن الحركة الحقيقية، والمركز المالي ما بيتطابقش مع الكشوف.
+     القيد هنا **عكس أطراف فاتورته نفسها** — بنفس حسابات بناء 134 وبنفس نسبة الضريبة:
+       • مرتجع بيع:  مدين «إيرادات المبيعات» بالصافي (+ مدين «الضريبة» بحصّتها) · دائن الطرف
+       • مرتجع شراء: مدين الطرف بالإجمالي · دائن «المخزون» بالصافي (+ دائن «الضريبة»)
+     «الطرف» = الحساب اللي اتسوّت بيه المرتجع: **رد قيمة** ⇒ خزينة/بنك/محفظة (`accForTreasuryAcc`)،
+     و**خصم من الرصيد** ⇒ `1.1.5` للعميل و`2.1.1` للمورد. الصافي والضريبة بيتقاسوا
+     من **نفس الفاتورة الأصلية** (`splitReturnNetTax`) بنسبة قيمة المرتجع من إجماليها، فمافيش
+     اختراع رقم: المرتجع بياخد حصّته العادلة بس. مفتاح `refId` = «SR:»/«PR:» + id المرتجع.
+     **بلا ترحيل بأثر رجعي** و**حذف المرتجع بيرجع قيده** (`deleteReturn`) زي تراجع الفاتورة. */
+  const RETURN_JRN = {
+    sale: { ref: "مرتجع مبيعات", prefix: "SR:", lineCode: "4.1", lineName: "إيرادات المبيعات", dueCode: "1.1.5", dueName: "مديونيات العملاء" },
+    purchase: { ref: "مرتجع مشتريات", prefix: "PR:", lineCode: "1.1.4", lineName: "المخزون", dueCode: "2.1.1", dueName: "مستحقات الموردين" }
+  };
+  function returnJrnKey(kind, id) {
+    const cfg = RETURN_JRN[kind];
+    const n = Number(id);
+    return (cfg && n > 0) ? cfg.prefix + n : "";
+  }
+  function returnJrnOf(kind, id) {
+    const key = returnJrnKey(kind, id);
+    if (!key) return null;
+    return journalEntries.find((j) => j && String(j.refId || "") === key) || null;
+  }
+  // حصّة المرتجع من صافي الفاتورة ومن ضريبتها — نسبة مقيسة من الفاتورة نفسها، بلا أي رقم جديد
+  function splitReturnNetTax(rec, inv) {
+    const total = round2(rec && rec.grandTotal);
+    const g = round2(inv && inv.grandTotal);
+    const taxAll = round2(inv && inv.taxAmount);
+    if (!(g > 0) || !(taxAll > 0)) return { total: total, net: total, tax: 0 };
+    const tax = round2((total * taxAll) / g);
+    return { total: total, net: round2(total - tax), tax: tax };
+  }
+  function returnJrnPlan(kind, rec, inv, tr) {
+    const cfg = RETURN_JRN[kind];
+    const part = splitReturnNetTax(rec, inv);
+    if (!(part.total > 0)) return { error: "amount" };
+    const refund = String((rec && rec.settlement) || "") === "refund";
+    const partyAcc = refund ? accForTreasuryAcc(tr) : accByCode(cfg.dueCode, cfg.dueName);
+    if (!partyAcc) return { error: refund ? "cash" : cfg.dueCode };
+    const lineAcc = accByCode(cfg.lineCode, cfg.lineName);
+    if (!lineAcc) return { error: cfg.lineCode };
+    const taxAcc = part.tax > 0 ? accByCode("2.1.2", "ضريبة") : null;
+    if (part.tax > 0 && !taxAcc) return { error: "2.1.2" };
+    const lines = [];
+    if (kind === "sale") {
+      lines.push({ accountId: Number(lineAcc.id), debit: part.net, credit: 0 });
+      if (part.tax > 0) lines.push({ accountId: Number(taxAcc.id), debit: part.tax, credit: 0 });
+      lines.push({ accountId: Number(partyAcc.id), debit: 0, credit: part.total });
+    } else {
+      lines.push({ accountId: Number(partyAcc.id), debit: part.total, credit: 0 });
+      lines.push({ accountId: Number(lineAcc.id), debit: 0, credit: part.net });
+      if (part.tax > 0) lines.push({ accountId: Number(taxAcc.id), debit: 0, credit: part.tax });
+    }
+    const d = round2(lines.reduce((m, l) => m + (Number(l.debit) || 0), 0));
+    const c = round2(lines.reduce((m, l) => m + (Number(l.credit) || 0), 0));
+    if (Math.abs(d - c) > 0.01) return { error: "unbalanced" };
+    return { lines: lines, debit: d, credit: c, part: part, partyAcc: partyAcc, lineAcc: lineAcc, taxAcc: taxAcc };
+  }
+  function postReturnJournal(kind, rec, inv, tr) {
+    const cfg = RETURN_JRN[kind];
+    if (!cfg || !rec || !rec.id) return null;
+    const done = returnJrnOf(kind, rec.id);
+    if (done) return { j: done, already: true };
+    const plan = returnJrnPlan(kind, rec, inv, tr);
+    if (plan.error) {
+      toast("المرتجع اتسجّل تمام. الترحيل التلقائي للقيود ما كملش لأن " +
+        invoiceJrnMissText(plan.error) + " — ضيفه من شاشة الحسابات وبعدها سجّل القيد من «القيود اليومية».", "warning");
+      return null;
+    }
+    const p = plan.part;
+    const j = {
+      id: nextJournalId(),
+      number: "JRN-" + String(journalEntries.length + 1).padStart(4, "0"),
+      date: rec.date || rec.returnDate || todayISO(),
+      desc: cfg.ref + " رقم (" + (rec.returnNumber || rec.returnNo || "") + ") — " +
+        (kind === "sale" ? (rec.customerName || rec.customer || "") : (rec.supplierName || rec.supplier || "")) +
+        " — " + fmt(p.total) + " ج.م" + (p.tax > 0 ? " (منها ضريبة " + fmt(p.tax) + ")" : ""),
+      ref: cfg.ref,
+      refType: cfg.ref,
+      refId: returnJrnKey(kind, rec.id),
+      debit: plan.debit,
+      credit: plan.credit,
+      lines: plan.lines
+    };
+    settleJrnLines(j.lines, 1);
+    journalEntries.push(j);
+    persistJournal();
+    saveAccounts();
+    try { renderJournal(); } catch (e) { }
+    return { j: j, already: false };
+  }
+  function removeReturnJournal(kind, id) {
+    const j = returnJrnOf(kind, id);
+    if (!j) return null;
+    settleJrnLines(j.lines, -1);
+    const i = journalEntries.findIndex((x) => x === j);
+    if (i >= 0) journalEntries.splice(i, 1);
+    JRN_ID_FLOOR = Math.max(JRN_ID_FLOOR, Number(j.id) || 0);
+    persistJournal();
+    saveAccounts();
+    try { renderJournal(); } catch (e) { }
+    return j;
+  }
+
   /* ---- دفتر حركة الحسابات: كل الحركات اللي تمت جوه أي حساب ---- */
   function computeLedger() {
     const el = $("#txtLedgerAcc");
@@ -9272,6 +9710,13 @@
     const text = ($("#txtLedgerAcc").value || "").trim();
     if (!text) {
       tbody.innerHTML = '<tr><td colspan="6">اكتب كود أو اسم الحساب لعرض كل الحركات اللي تمت جوه.</td></tr>';
+      if (info) info.textContent = "";
+      return;
+    }
+    // 🆕 بناء 149 (سطر ٥): دفتر الحركة بيتبني من القيود — نفس البوابة قبل أي حكم «مافيش»
+    if (jrnStillLoading()) {
+      lazyHold("journal");
+      tbody.innerHTML = '<tr><td colspan="6">' + JRN_WAIT_TEXT + '</td></tr>';
       if (info) info.textContent = "";
       return;
     }
@@ -9664,16 +10109,44 @@
    * المقابلة ليها (BS_OPERATIONAL) بتتاستنى من المجموع عشان العد مرتين ما يحصلش.
    */
   const BS_OPERATIONAL = ["1.1.1", "1.1.2", "1.1.3", "1.1.4", "1.1.5", "2.1.1", "2.1.2"];
+  // 🆕 بناء 149 (سطر ٤): الاستبعاد يبقى **بالدور** مش بالنص الحرفي — أدلة 6 شركات بلا نقاط خالص
+  // (111 صناديق / 115 مديونيات العملاء / 132 مستحقات الموردين / 133 ضريبة…) كانت بتتحسب
+  // **مرتين** في المركز المالي: مرة من الحركة (خزائن/عملاء/موردين/أصناف) ومرة من الدليل،
+  // وده بالظبط «رصيد الحساب في كشف حساب الحسابات ≠ رصيده في قائمة المركز المالي».
+  const BS_OP_ROLES = [
+    { codes: ["1.1.1", "111"], names: ["الصناديق النقدية"] },
+    { codes: ["1.1.2", "112"], names: ["البنوك والحسابات البنكية", "البنوك"] },
+    { codes: ["1.1.3", "113"], names: ["المحافظ الإلكترونية"] },
+    { codes: ["1.1.4", "114"], names: ["المخزون (بضاعة)", "المخزون"] },
+    { codes: ["1.1.5", "115"], names: ["مديونيات العملاء"] },
+    { codes: ["2.1.1", "132"], names: ["مستحقات الموردين"] },
+    { codes: ["2.1.2", "133"], names: ["ضريبة المبيعات المستحقة"] }
+  ];
+  function bsIsOperational(a) {
+    const c = String((a && a.code) || "");
+    const n = String((a && a.nameAr) || "").trim();
+    for (let i = 0; i < BS_OP_ROLES.length; i++) {
+      const r = BS_OP_ROLES[i];
+      if (r.codes.indexOf(c) >= 0) return true;
+      if (n && r.names.indexOf(n) >= 0) return true;   // الاسم الحرفي للدور (لو الشركة غيّرت الكود)
+    }
+    return false;
+  }
   const bsRound = (n) => Math.round((Number(n) || 0) * 100) / 100;
   // في النموذج الحالي openingBalance = الرصيد الجاري بعلامة المدين، فأرصدة الدائن بتترجع للإشارة الصح
   const bsLedgerValue = (a) => bsRound((a.openingBalance || 0) * (a.type === "asset" || a.type === "expense" ? 1 : -1));
   const bsHasChild = (a) => accounts.some((x) => Number(x.parentId) === Number(a.id));
   // مطابقة المجموعة على مستوى جزء كامل: "1.1" تاخد 1.1 و 1.1.x لكن ما تاخدش 1.10
-  const bsInGroup = (code, groups) => groups.some((g) => code === g || String(code).indexOf(g + ".") === 0);
+  // + في الدليل بلا نقاط: المجموعة "3.1" تطابق كود "141"؟ لأ — بتطابق نسختها بلا نقاط "31"،
+  // وده آمن لأن bsLeaves بيفلتربالنوع أولًا (31 مصروف فما يدخلش في حقوق الملكية).
+  const bsGroupMatches = (code, g) => String(code) === String(g) ||
+    String(code).indexOf(String(g) + ".") === 0 ||
+    (String(code).indexOf(".") < 0 && String(code) === String(g).replace(/\./g, ""));
+  const bsInGroup = (code, groups) => groups.some((g) => bsGroupMatches(code, g));
 
   // أوراق الدليل (من غير الحسابات الأب) لنوع معيّن داخل مجموعات الكود دي، مرتبة بالكود
   function bsLeaves(type, groups, restGroups) {
-    const leaves = accounts.filter((a) => a.isActive && a.type === type && !bsHasChild(a) && BS_OPERATIONAL.indexOf(String(a.code || "")) < 0);
+    const leaves = accounts.filter((a) => a.isActive && a.type === type && !bsHasChild(a) && !bsIsOperational(a));
     const hit = leaves.filter((a) => bsInGroup(String(a.code || ""), groups));
     if (restGroups) {
       // أي ورقة خارج الأقسام المعروفة تنزل في القسم الافتراضي عشان مافيش بند يضيع من القائمة
@@ -9810,12 +10283,56 @@
     return false;
   }
   const acsAll = () => accounts.filter((a) => a && a.isActive !== false);
-  const acsChildCount = (a) => accounts.filter((x) => Number(x.parentId) === Number(a.id)).length;
-  // كل أكواد المجموعة (النفس + الفروع) على مستوى جزء كامل
-  function acsGroupAccounts(acc) {
-    const code = String(acc.code || "");
-    return accounts.filter((a) => a && (String(a.code) === code || String(a.code).indexOf(code + ".") === 0));
+  // 🆕 بناء 149 (سطر ٤): مصدر واحد مضمون for «الفروع» — شجرة parentId + الأكواد بجزء كامل (1.1 ⇒ 1.1.x)
+  // + في الأدلة بلا نقاط (6 شركات من 8 مقاسة) الابن المباشر = كود بيسبق بكود الأب وأبوُه الأطول هو الأب نفسه،
+  // فـ 11 بيلمّ 111..115 و13 بيلمّ 131/132/133 من غير ما 1 يبتلع الالتزامات.
+  function acsIsDotFreeChart() {
+    return accounts.length > 0 && !accounts.some((a) => a && String(a.code || "").indexOf(".") >= 0);
   }
+  // أطول كود تاني موجود في الدليل وهو بادئة الكود ده (= أبوُه في دليل بلا نقاط)
+  function acsBareParentCode(code) {
+    let best = "";
+    accounts.forEach((x) => {
+      const c = String((x && x.code) || "");
+      if (!c || c === code) return;
+      if (code.indexOf(c) === 0 && c.length > best.length) best = c;
+    });
+    return best;
+  }
+  // كل أعضاء المجموعة (النفس + الفروع) — بترتيب مصفوفة accounts زي ما كان
+  function acsGroupAccounts(acc) {
+    if (!acc) return [];
+    const code = String(acc.code || "");
+    const selfId = Number(acc.id);
+    const dotFree = acsIsDotFreeChart();
+    // إغلاق شجرة parentId (transitive) تحت الأب
+    const byId = {};
+    accounts.forEach((a) => { if (a) byId[Number(a.id)] = a; });
+    const underTree = (a) => {
+      let p = Number(a && a.parentId);
+      const seen = {};
+      while (p && !seen[p]) {
+        seen[p] = 1;
+        if (p === selfId) return true;
+        p = Number(byId[p] && byId[p].parentId);
+      }
+      return false;
+    };
+    return accounts.filter((a) => {
+      if (!a) return false;
+      if (Number(a.id) === selfId) return true;
+      const c = String(a.code || "");
+      if (!code) return underTree(a);
+      if (c === code) return true;                            // نفس الكود (معرّفات مكرّرة في بيانات قديمة)
+      if (c.indexOf(code + ".") === 0) return true;          // فروع بالنقاط (جزء كامل)
+      if (underTree(a)) return true;                          // شجرة parentId
+      // ابن مباشر في دليل بلا نقاط: 111 أبوه الأطول = 11 ⇒ عضو في 11 (و 131 أبوه 13 مش 1)
+      if (dotFree && c.length > code.length && c.indexOf(code) === 0 && acsBareParentCode(c) === code) return true;
+      return false;
+    });
+  }
+  // نفس مصدر «الفروع» بالظبط — عشان العدّاد والورقة والكشف ما يختلفوش
+  const acsChildCount = (a) => acsGroupAccounts(a).length - 1;
   function acsAccountName(id) {
     const a = accounts.filter((x) => Number(x.id) === Number(id))[0];
     return a ? (a.nameAr || "") : "";
@@ -10036,7 +10553,20 @@
   function renderAccStatementView() {
     if (!acsGate()) return;
     acsBindOnce();
+    // 🆕 بناء 149 (سطر ٥): الكشف بيقرأ journalEntries — بلا بوابة كان بيقول
+    // «لا توجد حركات على هذا الحساب» والقيود لسه بتنزل (شكوى المالك).
+    if (jrnStillLoading()) { lazyHold("accStatement"); acsShowWaiting(); return; }
+    lazyRelease("accStatement");
     acsRenderList();
+  }
+  // سطر الانتظار نفسه في نفس مكان جدول الكشف (بلا أي حكم على البيانات)
+  function acsShowWaiting() {
+    const tbody = $("#dgvAcs tbody");
+    if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="bal-empty">' + JRN_WAIT_TEXT + '</td></tr>';
+    const info = $("#acsInfo"), head = $("#acsHead"), cnt = $("#acsCount");
+    if (info) info.textContent = "";
+    if (cnt) cnt.textContent = "⏳ مستني القيود توصل…";
+    if (head) head.textContent = "الحركات جاية من القيود اليومية — هتظهر هنا نفسها.";
   }
   // من «حركة حساب داخل القيود» في شاشة القيود → نفس الحساب في الكشف الكامل بالفترة
   function openAccStatementFor(text) {
@@ -13012,6 +13542,9 @@ const pwEye = document.getElementById("btnShowPass");
       return window.CLOUD.loadAll().then(() => {
         const changed = adoptCloud();
         A.adopting = false;
+        // 🆕 بناء 149 (سطر ٥): القيود دي نزلت فعلًا ⇒ أي شاشة كانت مستنية «لسه بتنزل»
+        // بتترسم من جديد بالبيانات الحقيقية (مافيش «لا توجد قيود بعد» كذّابة).
+        try { window.mizanOnLazyReady(); } catch (e) { }
         persistLocalFromCloud();
         // 🔑 ختم ملكية الحالة: اللي في المتصفح ده دلوقتي = بيانات هذه الشركة بالذات
         try { stampStateOrg(DATA.org && DATA.org() ? DATA.org().id : null); } catch (e) { }
