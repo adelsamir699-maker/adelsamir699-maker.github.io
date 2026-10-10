@@ -2809,8 +2809,11 @@
       "\n\nالمبلغ هيرجع لرصيد «" + (accName || "الحساب") + "»، والسند المرتبط بيتحذف معاه.";
     if (!confirm(msg)) return;
     // السند المرتبط بنفس الحركة (customer_tx / supplier_tx)
+    // 🆕 بناء 151: الشغل عدّى على نقطة الارتكاز — لو للسند قيد (`VC:`+id) بيرجع قبل ما السند يتشال
     const vBefore = vouchers.length;
-    vouchers = vouchers.filter((v) => !(v.refType === (isSup ? "supplier_tx" : "customer_tx") && Number(v.refId) === Number(tx.id)));
+    const vDrop = dropVouchersWithJournal(
+      vouchers.filter((v) => v.refType === (isSup ? "supplier_tx" : "customer_tx") && Number(v.refId) === Number(tx.id))
+    );
     pool.splice(idx, 1);
     // 🆕 بناء 149 (سطر ١): حذف الحركة بيرجع قيدها كمان — تراجع كامل بنفس عرف الفاتورة (بناء 134)
     const jRemoved = removePartyTxJournal(isSup ? "supp" : "cust", tx.id);
@@ -2828,7 +2831,9 @@
     saveTreasury();
     toast("تم حذف الحركة — " + fmt(amount) + " ج.م رجع لـ«" + (accName || "الحساب") + "»." +
       (vBefore !== vouchers.length ? " والسند المرتبط اتشال معاه." : "") +
-      (jRemoved ? " والقيد المرتبط اتراجع." : ""), "success");
+      (jRemoved ? " والقيد المرتبط اتراجع." : "") +
+      // 🆕 بناء 151: أمانة الرسالة — لو السند كان مترحّل فعلًا («VC:»/«SE:») قيده رجع معه، مش كلام عام
+      (vDrop.journals ? " وقيود السندات المرتبطة اتراجعت." : ""), "success");
     // تحديث الشاشات المفتوحة
     try { if (statementCtx) refreshStatementView(); } catch (e) { }
     try { if (isSup) renderSuppliers(); else renderTable(); } catch (e) { }
@@ -8061,7 +8066,9 @@
       const vIdx = vouchers.findIndex((v) =>
         (String(v.refType || "") === (isSales ? "sale_return" : "purchase_return") && Number(v.refId) === Number(r.id)) ||
         (String(v.desc || "").includes("رجع مبيعات رقم " + no) || String(v.desc || "").includes("رجع مشتريات رقم " + no)));
-      if (vIdx !== -1) { vouchers.splice(vIdx, 1); saveVouchers(); }
+      // 🆕 بناء 151: السند يتشال من نقطة الارتكاز — لو كان مترحّل («VC:»/«SE:») قيده بيرجع معه،
+      // و«قيد المرتجع» نفسه (`SR:`/`PR:`) بترجّعه السطر اللي بعده (`removeReturnJournal`) — مانعملش الاتنين هنا
+      if (vIdx !== -1) { dropVoucherWithJournal(vouchers[vIdx]); saveVouchers(); }
       recalculateTreasuryBalances();
       renderTreasury();
       renderTreMoves();
@@ -9063,14 +9070,16 @@
 
     const note = $("#simpleNotes").value.trim();
     const vDesc = (income ? "إيراد: " : "مصروف: ") + itemAcc.nameAr + (note ? " — " + note : "");
-    vouchers.push({
+    // 🆕 بناء 151: السند يبقى له اسم، عشان خيط «SE:» يمسك id بتاعه (نفس نمط VC:/SR:/PR:/S:/P:)
+    const seV = {
       id: vouchers.reduce((m, x) => Math.max(m, x.id), 0) + 1,
       type: income ? "in" : "out",
       treasuryId: Number(t.id),
       date: date,
       amount: amount,
       desc: vDesc
-    });
+    };
+    vouchers.push(seV);
     saveVouchers();
     recalculateTreasuryBalances(); // نفس معادلة الأرصدة القديمة: السند اتضاف فبيتحسب تلقائيًا
 
@@ -9083,6 +9092,11 @@
       date: date,
       desc: vDesc,
       ref: income ? "تسجيل إيرادات" : "تسجيل مصروفات",
+      // 🆕 بناء 151: خيط «SE:» + id السند ⇒ قيد الإيراد/المصروف مربوط بسنده،
+      // فحذف السند (من نقطة الارتكاز) بيرجع قيده، و«مِسطرة الترحيل» (بناء 152)
+      // ما تشوفش السند ده «بلا قيد» وتترحّله تاني = عدّ مزدوج.
+      refType: income ? "تسجيل إيرادات" : "تسجيل مصروفات",
+      refId: "SE:" + seV.id,
       debit: amount,
       credit: amount,
       lines: lines
@@ -9157,6 +9171,10 @@
         date: date,
         desc: tag,
         ref: "تحويل بين الحسابات",
+        // 🆕 بناء 151: خيط «TF:» على id سند الصرف (الساق الأساس) ⇒ القيد معروف أنه اترحّل،
+        // فـ«مِسطرة الترحيل» (١٥٢) ما ترحّلو تاني (عدّ مزدوج) ونقطة الارتكاز تلقاه عند الحذف.
+        refType: "تحويل بين الحسابات",
+        refId: "TF:" + (baseId + 1),
         debit: amount,
         credit: amount,
         lines: lines
@@ -9230,10 +9248,11 @@
       a = accounts.find((x) => x && x.isActive !== false && String(x.code || "").indexOf(".") < 0 && String(x.code) === bare);
       if (a) return a;
     }
-    // (ج) مرادفات معروفة للأدلة بلا نقاط (ترقيم السحابة: 13=الالتزامات، 132=مستحقات الموردين، 21=إيرادات المبيعات)
-    //     بتشتغل في الدليل اللي مافيهوش أي نقطة خالص، عشان ما تخمش حساب في دليل بالنقاط
-    const dotFree = accounts.length > 0 && !accounts.some((x) => x && String(x.code || "").indexOf(".") >= 0);
-    const ALIAS = dotFree ? {
+    // (ج) مرادفات ترقيم السحابة بلا نقاط (13=الالتزامات، 132=مستحقات الموردين، 21=إيرادات المبيعات) —
+    //     بتشتغل في أي دليل فيه حساب مجرّد (بلا نقاط خالص أو مختلط)، وبتلاقي حساب المجرّد بس،
+    //     عشان عمرها ما تخمّش حساب منقّط في دليل بالنقاط
+    const hasBare = accounts.some((x) => { const c = String(x.code || ""); return c.indexOf(".") < 0 && /^\d{2,}$/.test(c); });
+    const ALIAS = hasBare ? {
       "1.1": ["11"], "1.1.1": ["111"], "1.1.2": ["112"], "1.1.3": ["113"], "1.1.4": ["114"], "1.1.5": ["115"],
       "2.1": ["131"], "2.1.1": ["132"], "2.1.2": ["133"],
       "3.1": ["141"], "3.2": ["142"], "4.1": ["21"], "5.1": ["31"]
@@ -9241,7 +9260,7 @@
     const al = ALIAS[String(code)];
     if (al) {
       for (let i = 0; i < al.length; i++) {
-        a = accounts.find((x) => x && x.isActive !== false && String(x.code) === al[i]);
+        a = accounts.find((x) => x && x.isActive !== false && String(x.code) === al[i] && String(x.code || "").indexOf(".") < 0);
         if (a) return a;
       }
     }
@@ -9827,6 +9846,81 @@
     $("#cItemNewName").value = "";
     renderCItems();
     toast("تمت إضافة البند «" + name + "» وهو متاح الآن في التسجيل المبسط.", "success");
+  }
+
+  /* ================== 🆕 بناء 151 — «باب القيد الشبح»: حذف السند بيرجع قيده ==================
+     أمر المالك الحرفي (10/10): «removeVoucherJournal الأول (حذف السند بيرجع قيده) — دي وحدها باب
+     لقيد شبح؛ لو رحّلنا السندات وبعدين مسحنا واحدة يفضل قيد يتيم».
+     **القياس على الحيّ (build 150):** `removeVoucherJournal` = **صفر ظهور**، والسند كان بيُشال في
+     مكانين بس — `vouchers = vouchers.filter(...)` عند حذف حركة عميل/مورد، و`vouchers.splice(...)`
+     عند حذف مرتجع «رد نقدي» — والاتنين بيرجّعوا **الخزينة** وما بيلمسوا `journalEntries` خالص ⇒
+     أي سند اترحّل (بناء 149 سطر ٢) ومسه صاحبه يسيب **قيدًا يتيمًا**: طرفان متزانان على رقم مش موجود.
+     **نقطة ارتكاز واحدة** (`dropVoucherWithJournal`): كل حذف سند منفرد في المشروع بيعدّي عليها،
+     فـ«نسيت أرجّع القيد» مابقاش احتمال بشري — الحارس `check_voucher_ghost_151.js` بيمسك أي
+     `vouchers = vouchers.filter(` أو `vouchers.splice(` برّه الدالة (بنية + معايرة حقن).
+     **خيط السند ↔ القيد** = `journal_entries.ref_id` بالحرف: «VC:»+id من `postVoucherJournal`،
+     و«SE:»+id لسطر «تسجيل مصروفات/إيراد» (`saveSimpleEntry`) — **مافيش ترقية سحابية**: العمود `text`
+     حيّ من قبل (مقياس على لقطة المخطط)، وجدول السندات مالوش أعمدة ref أصلًا فمافيش محل تاني.
+     **ممنوع حذف قيد بلا تسوية:** نفس عرف `removeInvoiceJournal` حرفيًا — `settleJrnLines(lines,-1)`
+     ثم الإسقاط من `journalEntries` ثم رفع `JRN_ID_FLOOR` ثم `persistJournal()` و`saveAccounts()`،
+     فالأرصدة ترجع زي ما كانت بالملّيمَة، والرقم اللي بيتعمل بعد كده ما ياخدش id متحذف.
+     **بلا اختراع:** مافيش قيد للسند ⇒ السند يتشال عادي والرسالة ما تقولش غير الحقيقة (العدّاد).
+     **ممنوع ازدواج:** المِسطرة (١٥٢) بتقرأ نفس المفتاحين قبل ما ترحّل بأثر رجعي — من غير «SE:»
+     كانت هتحسب سند المصروف «مالوش قيد» وتزيّده تاني (درس العدّ المزدوج في 147). */
+  function voucherJrnKeysOf(vId) {
+    const id = Number(vId);
+    if (!(id > 0)) return [];
+    // «TF:» = قيد التحويل (سندان متتاليان + قيد واحد) — المفتاح على id سند **الصرف** (= baseId+1).
+    const out = [voucherJrnKey(id), "SE:" + id, "TF:" + id];
+    // الساق التانية (القبض، id = الصرف+1): يطابق «TF:+(id−1)» **بس** لو سند الصرف موجود فعلًا —
+    // ids فريدة والحذف بيشيل القيد مع السند ⇒ مافيش مفتاح توهم (متقاس في الحارس J4ب).
+    // **تنبيه لمن بعدي (١٥٤):** حذف ساق واحدة من تحويل = القيد بيرجع بس الساق التانية بتفضل —
+    // حذف تحويل لازم يكون **الساقين مع بعض**، وده شغل بناء 154 (الضغطتين + `RV:`).
+    if (vouchers.some((v) => v && Number(v.id) === id - 1)) out.push("TF:" + (id - 1));
+    return out;
+  }
+  function voucherJrnsOf(vId) {
+    const keys = voucherJrnKeysOf(vId);
+    if (!keys.length) return [];
+    return journalEntries.filter((j) => j && keys.indexOf(String(j.refId || "")) !== -1);
+  }
+  // تراجع قيود السند كله (عادة قيد واحد) بنفس عرف الفاتورة — وترجع list اللي انمسح فعلًا
+  function removeVoucherJournal(vId) {
+    const list = voucherJrnsOf(vId);
+    if (!list.length) return [];
+    const out = [];
+    list.forEach((j) => {
+      settleJrnLines(j.lines, -1);
+      const i = journalEntries.findIndex((x) => x === j);
+      if (i >= 0) journalEntries.splice(i, 1);
+      JRN_ID_FLOOR = Math.max(JRN_ID_FLOOR, Number(j.id) || 0);
+      out.push(j);
+    });
+    persistJournal();
+    saveAccounts();
+    try { renderJournal(); } catch (e) { }
+    return out;
+  }
+  // 🚧 نقطة الارتكاز الوحيدة لحذف سند منفرد — الحارس 151 بيفشل أي splice/filter برّها
+  function dropVoucherWithJournal(vOrId) {
+    const id = Number(vOrId && typeof vOrId === "object" ? vOrId.id : vOrId);
+    const res = { id: id || 0, voucher: false, journals: [] };
+    if (!(id > 0)) return res;
+    res.journals = removeVoucherJournal(id);
+    const i = vouchers.findIndex((v) => Number(v.id) === id);
+    if (i >= 0) { vouchers.splice(i, 1); res.voucher = true; }
+    return res;
+  }
+  function dropVouchersWithJournal(list) {
+    const arr = Array.isArray(list) ? list.slice() : [];
+    const out = { vouchers: 0, journals: 0, dropped: [] };
+    arr.forEach((v) => {
+      const r = dropVoucherWithJournal(v);
+      if (r.voucher) out.vouchers++;
+      out.journals += r.journals.length;
+      out.dropped.push(r);
+    });
+    return out;
   }
 
   /* ================== 🆕 مهمة 98: سجل الأصول الثابتة ================== */
