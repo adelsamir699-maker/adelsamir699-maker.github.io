@@ -40,6 +40,8 @@
   // 🆕 شجرة الحسابات: نسخة محلية من «أصحاب المنشأة» — عشان حسابات الشركاء (رأس المال/المسحوبات)
   // تتولّد وتتزامن من غير ما نحتاج نفتح شاشة الإعدادات. بتُمسح مع تبديل الشركة (تصفير العزل).
   const LS_OWNERS = "mizan_owners_v1";
+  // 🆕 بناء 176: ورديات الكاشير — جلسة استعمال صندوق لحد ما الكاشير يقفلها بأمر.
+  const LS_SHIFTS = "mizan_shifts_v1";
   /* 🧮 بناء 145 → 146: ورق «الجرد بالباركود» على جهاز العميل بس (مافيش جدول سحابي ومافيش ترقية).
      ⚠️ المفتاح **بره** `LS_ALL_KEYS` عندنا عمدًا، والسبب مقاس حيًّا (طلب المالك 06/10 ≈23:50:
      «مش بيحفظ ورقة الجرد»): `guardOrgSwitch()` بينادي `wipeLocalTables()` اللي بتمسح **كل**
@@ -54,7 +56,7 @@
     LS_CUSTOMERS, LS_TXS, LS_PRODUCTS, LS_ACTIVITY, LS_SALES, LS_TREASURY,
     LS_SUPPLIERS, LS_SUP_TXS, LS_PURCHASES, LS_ACCOUNTS, LS_JOURNAL,
     LS_USERS, LS_VOUCHERS, LS_SALE_RETURNS, LS_PURCHASE_RETURNS, LS_SETTINGS,
-    LS_FIXED_ASSETS, LS_OWNERS
+    LS_FIXED_ASSETS, LS_OWNERS, LS_SHIFTS
   ];
   // 🛡 عزل الشركات: أي مفتاح آخر كتبته بيانات شركة معينة
   // (لو دخل حساب من شركة تانية → البيانات القديمة تُمسح قبل التحميل)
@@ -311,7 +313,11 @@
     taxRateBuy: TAX.rateBuy,
     plan: "فردي (مستخدم واحد)",
     planEnd: "",
-    planStatus: "تجربة 🧪"
+    planStatus: "تجربة 🧪",
+    // 🆕 بناء 176: إعدادات ورديات الكاشير (قرار المالك 16/10)
+    shiftBlindCount: true,   // العدّ الأعمى — الكاشير ما يشوفش المتوقّع
+    shiftCountDenoms: false,  // عدّ بالفئات (20/50/100) بدل الإجمالي
+    shiftSettlePerm: "manager" // مين يضغط زرار التسوية: "manager" (المدير فقط) أو "cashier" (يحدده المالك)
   };
 
   /* ================== 🛡 بناء 119: شركة جديدة = بيور ================== */
@@ -473,6 +479,9 @@
   let scSheets = [];
   let scSheetCur = null;
   let settings = {};
+  // 🆕 بناء 176: ورديات الكاشير — كل وردية = جلسة استعمال صندوق (خزينة) برقاقة افتتاحية
+  // تُقفل بأمر فقط (مش بالوقت) وتُسوّى بعدين بتحويل الصندوق على الخزينة الرئيسية.
+  let shifts = [];
   let editingId = null;
 
   /* ================== أدوات ================== */
@@ -501,7 +510,7 @@
       rows.forEach((r) => { if (Number(r.id) > m) m = Number(r.id); });
       return m + 1;   // تاريخيًا سطر مستخدم قديم ممكن ياخد id = 1 ⇒ ما نتكرارش معاه
     };
-    if (Array.isArray(customers) && customers.length) {
+    if (Array.isArray(customers)) {
       let cashCust = customers.find((c) => c.protected === true || String(c.code || "").trim() === "1" || c.code === "CASH" ||
         (Number(c.id) === 1 && String(c.nameAr || "").includes("العميل النقدي")));
       if (cashCust) {
@@ -524,7 +533,7 @@
         });
       }
     }
-    if (Array.isArray(suppliers) && suppliers.length) {
+    if (Array.isArray(suppliers)) {
       let cashSupp = suppliers.find((s) => s.protected === true || String(s.code || "").trim() === "1" ||
         ((s.code === "SUPP-001" || Number(s.id) === 1) && String(s.nameAr || "").includes("المورد النقدي")));
       if (cashSupp) {
@@ -1172,6 +1181,8 @@
       scSheets = scSheetsRead();
       scSheetCur = null;
       settings = Object.assign({}, defaultSettings, JSON.parse(localStorage.getItem(LS_SETTINGS)) || {});
+      // 🆕 بناء 176: تحميل ورديات الكاشير
+      shifts = JSON.parse(localStorage.getItem(LS_SHIFTS)) || [];
       TAX.enabled = settings.taxEnabled == null ? TAX.enabled : Boolean(settings.taxEnabled);
       if (settings.taxRate != null) {
         const r = parseFloat(settings.taxRate) || 0;
@@ -1201,6 +1212,7 @@
       fixedAssets = [];
       scSheets = []; scSheetCur = null; scLoadedKey = null;   // المتصفح رفض القراءة ⇒ أساس الذاكرة راح
       settings = Object.assign({}, defaultSettings);
+      shifts = [];
     }
     // 🛡 بناء 122: ذيل «أثبّت الفاضي على القرص» ما يقعّش الإقلاع. في متصفح بيرفض
     // لمس localStorage (وضع خاص قديم / iframe محجوب الكوكيز) كان بيطير Exception من
@@ -1223,6 +1235,7 @@
       if (!localStorage.getItem(LS_SALE_RETURNS)) saveSaleReturns();
       if (!localStorage.getItem(LS_PURCHASE_RETURNS)) savePurchaseReturns();
       if (!localStorage.getItem(LS_FIXED_ASSETS)) saveFixedAssets();
+      if (!localStorage.getItem(LS_SHIFTS)) saveShifts();
       if (!localStorage.getItem(LS_SETTINGS)) saveSettings();
     } catch (e) {
       console.warn("mizan: المتصفح رفض تثبيت الحالة على القرص — البرنامج شغال في الذاكرة", e && e.message);
@@ -1299,6 +1312,12 @@
 
   function saveSettings() {
     localStorage.setItem(LS_SETTINGS, JSON.stringify(settings));
+  }
+
+  // 🆕 بناء 176: حفظ ورديات الكاشير — محلي أولًا ثم رفع سحابي ثم لقطة الديسك
+  function saveShifts() {
+    localStorage.setItem(LS_SHIFTS, JSON.stringify(shifts));
+    pushTable("cashier_shifts"); syncToLocalDisk();
   }
 
   function saveActivity() {
@@ -1809,7 +1828,8 @@
     // «قيد التطوير» ولا يفتح الشاشة إطلاقًا (نفس صنف باگ بناء 125). الحارس الثابت بايتش.
     // 🧾 بناء 163: «ضريبة المبيعات» اتضافت لنفس القائمة (وإلا الزرار يرمي «قيد التطوير»).
     // 📚 بناء 164: «دفتر الأستاذ العام/المساعد» لنفس القائمة (وإلا الزرار يرمي «قيد التطوير»).
-    "chartTree", "salesTax", "glLedger", "subLedger"];
+    // 🧾 بناء 176: «ورديات الكاشير» — لنفس القائمة (وإلا الزرار يرمي «قيد التطوير»).
+    "chartTree", "salesTax", "glLedger", "subLedger", "cashierShifts"];
 
   // حساب المستخدم الحالي — المصدر الموثوق هو mizan_access (فيه role + is_superadmin)
   // لأن getProfile() قد يكون null أو ناقصًا لحظة الدخول.
@@ -2025,6 +2045,16 @@
     }
     // 🆕 بناء 115: القيود اليومية (اليدوي المحاسبي + التسجيل المبسط) — لصاحب الشركة والمالك فقط
     if (name === "journal") return isSuperAcct() || isCompanyOwnerAcct();
+    // 🧾 بناء 176: «ورديات الكاشير» — الشاشة لسه **قيد الإنشاء** (البنية والمحرّك
+    // بس، بدون واجهة عدّ/تقفيل/تسوية). ممنوعة على الجميع (بما فيهم المالك) لحد
+    // ما تكتمل، تفاديًا لعرض شاشة ناقصة. **لما تخلص الشاشة: اشيل السطر ده وارجّع
+    // البوابة المعتادة** (تحت، معلّقة في التعليق).
+    if (name === "cashierShifts") return false;
+    // if (name === "cashierShifts") {
+    //   if (isSuperAcct() || isCompanyOwnerAcct()) return true;
+    //   if (!DE.featureFlag) return false;
+    //   return DE.featureFlag("cashierShifts") === true;
+    // }
     // 🆕 شاشة «كشف حساب الحسابات» (من القيود اليومية) — نفس بوابة القيود بالظبط
     if (name === "accStatement") return isSuperAcct() || isCompanyOwnerAcct();
     // 📚 بناء 164: «دفتر الأستاذ العام» و«دفتر الأستاذ المساعد» — نفس بوابة القيود (مصدرهم نفسه)
@@ -2534,7 +2564,7 @@
     const q = normalizeAr($("#txtCustomerSearch").value);
 
     customers
-      .filter((c) => !c.protected && c.code !== "1" && c.id !== 1 && !(c.nameAr && c.nameAr.includes("العميل النقدي")))
+      .filter((c) => !c.protected && c.code !== "1" && !(c.nameAr && c.nameAr.includes("العميل النقدي")))
       .filter((c) => {
         if (!q) return true;
         return (
@@ -2665,7 +2695,7 @@
     const sel = $("#pCust");
     sel.innerHTML = "";
     customers
-      .filter((c) => !c.protected && c.code !== "1" && c.id !== 1 && !(c.nameAr && c.nameAr.includes("العميل النقدي")))
+      .filter((c) => !c.protected && c.code !== "1" && !(c.nameAr && c.nameAr.includes("العميل النقدي")))
       .forEach((c) => {
         const opt = document.createElement("option");
         opt.value = c.id;
@@ -2802,7 +2832,7 @@
     const bal = $("#actBalance");
     bal.textContent = "الرصيد الحالي (المديونية): " + fmt(cust.currentBalance) + " ج.م";
     bal.className = "act-bal " + (cust.currentBalance > 0 ? "balance-debit" : "balance-credit");
-    const isCash = cust.protected || cust.code === "1" || cust.id === 1;
+    const isCash = cust.protected === true || cust.code === "1" || cust.code === "CASH";
     const btnDel = $("#actDelete");
     if (btnDel) {
       btnDel.disabled = isCash;
@@ -3130,7 +3160,7 @@
      🔳 الباركود — بناء 139 (CODE 128 · Set B · دولجين في المتصفح)
      ══════════════════════════════════════════════════════════════════════
      أمر المالك الحرفي (04/10): «توليد الباركود للأصناف (إضافة + الموجودين)
-     + زرار طباعة الباركود قدام ��ل صنف بالمخزون».
+     + زرار طباعة الباركود قدام كل صنف بالمخزون».
      ليه من غير مكتبة: الحزمة المنشورة على GitHub Pages بتضل ملفات العشرة
      بتوعها بالظبط (مافيش dependency خارجي ولا CDN)، وجدول CODE-128 قياسي
      ومغلق: 107 رمز فقط ⇒ يبقى سطرًا في الكود بدل مكتبة.
@@ -5920,7 +5950,7 @@
 
   function posSelectDefaultCustomer() {
     const sel = $("#cmbPosCustomer");
-    const def = customers.find((c) => c.code === "1") || customers.find((c) => c.id === 1) || customers.find((c) => c.protected) || customers.find((c) => (c.nameAr || "").includes("كاش") || (c.nameAr || "").includes("نقدي")) || customers[0];
+    const def = customers.find((c) => c.code === "1") || customers.find((c) => c.protected === true) || customers.find((c) => (c.nameAr || "").includes("كاش") || (c.nameAr || "").includes("نقدي")) || customers[0];
     if (def) sel.value = def.nameAr;
   }
 
@@ -6682,21 +6712,23 @@
       grandTotal: t.grand,
       paidAmount: t.paid,
       dueAmount: t.due,
-      partyPrevBalance: cust.protected ? null : (Math.round((Number(cust.currentBalance) || 0) * 100) / 100),
-      items: posItems.map((it, idx) => ({
-        id: idx + 1,
-        productId: it.productId,
-        code: it.code,
-        nameAr: it.nameAr,
-        unit: lineUnit(it),          // 🆕 الوحدة بتتحل من الصنف لو السطر فاضي — بتُخزن على الفاتورة نفسها
-        qty: it.qty,
-        price: it.price,
-        discount: it.discount,
-        tax: it.tax,
-        total: it.total
-      })),
-      status: "posted"
+      partyPrevBalance: cust.protected ? null : (Math.round((Number(cust.currentBalance) || 0) * 100) / 100)
     };
+    try { stampShiftOn(invoice); } catch (e) {}
+    // construct items and status after stamp
+    invoice.items = posItems.map((it, idx) => ({
+      id: idx + 1,
+      productId: it.productId,
+      code: it.code,
+      nameAr: it.nameAr,
+      unit: lineUnit(it),
+      qty: it.qty,
+      price: it.price,
+      discount: it.discount,
+      tax: it.tax,
+      total: it.total
+    }));
+    invoice.status = "posted";
 
     // 🆕 بناء 158: حارس «لا ترحيل بلا حساب» — القياسي يتأمّن، وغير القياسي لو ناقص يمنع الحفظ
     ensureJrnStd();
@@ -6958,7 +6990,7 @@
 
   function ppSelectDefaultSupplier() {
     const sel = $("#cmbPosSupplier");
-    const def = suppliers.find((s) => s.code === "1") || suppliers.find((s) => s.id === 1) || suppliers.find((s) => s.protected) || suppliers.find((s) => (s.nameAr || "").includes("كاش") || (s.nameAr || "").includes("نقدي")) || suppliers[0];
+    const def = suppliers.find((s) => s.code === "1") || suppliers.find((s) => s.protected === true) || suppliers.find((s) => (s.nameAr || "").includes("كاش") || (s.nameAr || "").includes("نقدي")) || suppliers[0];
     if (def) sel.value = def.nameAr;
   }
 
@@ -7505,7 +7537,7 @@
     tbody.innerHTML = "";
     const q = normalizeAr($("#txtSupplierSearch").value);
     suppliers
-      .filter((s) => !s.protected && s.code !== "1" && s.id !== 1 && !(s.nameAr && s.nameAr.includes("المورد النقدي")))
+      .filter((s) => !s.protected && s.code !== "1" && !(s.nameAr && s.nameAr.includes("المورد النقدي")))
       .filter((s) => {
         if (!q) return true;
         return (
@@ -7632,7 +7664,7 @@
     const bal = $("#sactBalance");
     bal.textContent = "الرصيد الحالي (المستحق): " + fmt(s.currentBalance) + " ج.م";
     bal.className = "act-bal " + (s.currentBalance > 0 ? "balance-debit" : "balance-credit");
-    const isCash = s.protected || s.code === "1" || s.id === 1;
+    const isCash = s.protected === true || s.code === "1" || s.code === "CASH";
     const btnDel = $("#sactDelete");
     if (btnDel) {
       btnDel.disabled = isCash;
@@ -7669,7 +7701,7 @@
     const sel = $("#psSupplier");
     sel.innerHTML = "";
     suppliers
-      .filter((s) => !s.protected && s.code !== "1" && s.id !== 1 && !(s.nameAr && s.nameAr.includes("المورد النقدي")))
+      .filter((s) => !s.protected && s.code !== "1" && !(s.nameAr && s.nameAr.includes("المورد النقدي")))
       .forEach((s) => {
         const opt = document.createElement("option");
         opt.value = s.id;
@@ -7753,7 +7785,7 @@
     postPartyTxJournal("supp", txRow, tr, supp ? supp.nameAr : "");
     hideModal("mPaySuppDebt");
     addActivity("سداد مورد", "سداد مستحقات " + supp.nameAr + " بمبلغ " + fmt(amount) + " ج.م" + (tr ? " من " + tr.name : ""));
-    toast("تم تسجيل السداد بنجاح وتحدي�� رصيد الحساب.", "success");
+    toast("تم تسجيل السداد بنجاح وتحديث رصيد الحساب.", "success");
     renderSuppliers();
     if (typeof renderTreasury === "function") renderTreasury();
     if (typeof renderTreMoves === "function") renderTreMoves();
@@ -8899,6 +8931,70 @@
     return map;
   }
 
+  /* ================== 🧾 ورديات الكاشير (بناء 176) ==================
+     - الكاشير يفتح وردية على صندوق (treasury type=cash) برقاقة افتتاحية
+     - الوردية تقفل بأمر فقط (مش بالوقت) — يتم الترحيل عند الإغلاق (فرق العدّ الأعمى)
+     - التسوية = تحويل رصيد الصندوق على الخزينة الرئيسية (بصلاحية مدير)
+     - الحسابات: حساب عجز/زيادة يُنشأ تلقائياً لكل صندوق (باسم الكاشير)
+  */
+
+  function shiftNowISO() {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + "T" + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+
+  function currentShift() {
+    const ca = currentAcct();
+    const cid = ca && (ca.user_id || ca.id || ca.username || ca.full_name) ? (ca.user_id || ca.id || ca.username || ca.full_name) : activityUser();
+    const cname = ca && (ca.full_name || ca.name) ? (ca.full_name || ca.name) : activityUser();
+    const uidKey = String(cid || cname || "");
+    return shifts.find(s => s.status === "open" && (s.cashierKey === uidKey || s.cashierId === cid || s.cashierName === cname)) || null;
+  }
+
+  function activeShift() { return currentShift(); }
+
+  function nextShiftId() {
+    return (shifts.reduce((m, x) => Math.max(m, x.id || 0), 0)) + 1;
+  }
+
+  function shiftOverShortAccountName(treasuryName, cashierName) {
+    const tn = String(treasuryName || "صندوق").replace(/^\s+|\s+$/g, "");
+    const cn = String(cashierName || "كاشير").replace(/^\s+|\s+$/g, "");
+    return "عجز/زيادة - " + tn + " - " + cn;
+  }
+
+  function ensureShiftOverShortAccount(treasuryName, cashierName, side) {
+    // side: 'short' | 'over' (العجز مصروف / الزيادة إيراد أو يتحمل في حساب مستقل؟)
+    const tn = String(treasuryName || "صندوق").replace(/^\s+|\s+$/g, "");
+    const cn = String(cashierName || "كاشير").replace(/^\s+|\s+$/g, "");
+    const kind = side === 'over' ? 'زيادة' : 'عجز';
+    const nm = kind + " - " + tn + " - " + cn;
+    let a = accounts.find(x => x.isActive !== false && String(x.nameAr) === nm);
+    if (a) return a;
+    // اعمل حساب فرعي تحت 5.1 للمصروفات (عجز) أو تحت 4.1 للإيرادات (زيادة) حسب الحاجة
+    const parentCode = side === 'over' ? "4.1" : "5.1";
+    const parent = ensureJrnAccount(parentCode) || accounts.find(x => x.code === parentCode && x.isActive !== false) || accounts.find(x => x.code === parentCode);
+    if (parent && parent.isActive === false) parent.isActive = true;
+    // توليد كود فرعي بسيط
+    const sibs = accounts.filter(x => x.parentId === (parent ? parent.id : 0) && x.code && x.code.indexOf(parentCode + ".") === 0);
+    let seq = 1;
+    for (let i = 1; i < 1000; i++) {
+      const cand = parentCode + "." + String(i).padStart(2, "0");
+      if (!accounts.find(x => String(x.code) === cand)) { seq = i; break; }
+    }
+    const cand = parentCode + "." + String(seq).padStart(2, "0");
+    a = { id: nextAccountId(), code: cand, nameAr: nm, type: parent ? parent.type : (side === 'over' ? "revenue" : "expense"), parentId: parent ? parent.id : 0, openingBalance: 0, isActive: true };
+    accounts.push(a);
+    saveAccounts();
+    return a;
+  }
+
+  function stampShiftOn(obj) {
+    const s = activeShift();
+    if (s && obj && typeof obj === "object" && obj.shiftId == null) obj.shiftId = s.id;
+  }
+
   function openTreasuryDialog(t) {
     treasuryEditingId = t ? t.id : null;
     $("#treasuryModalTitle").textContent = t ? "✏️ تعديل الخزينة" : "➕ إضافة خزينة / حساب";
@@ -8908,6 +9004,43 @@
     $("#tOpening").value = t ? moneyStr(t.openingBalance || 0) : "0";
     showModal("mTreasury");
     $("#tName").focus();
+  }
+
+  function getMainTreasury() {
+    return treasury.find(x => x.type === "cash") || treasury[0] || null;
+  }
+
+  function openShiftFor(treasuryId, float) {
+    const ca = currentAcct();
+    const cid = ca && (ca.user_id || ca.id || ca.username) ? (ca.user_id || ca.id || ca.username) : activityUser();
+    const cname = ca && (ca.full_name || ca.name) ? (ca.full_name || ca.name) : activityUser();
+    const tr = treasury.find(x => x.id === Number(treasuryId));
+    if (!tr) return { ok: false, msg: "يجب اختيار صندوق (خزينة نقدية)" };
+    const s = {
+      id: nextShiftId(),
+      cashierId: cid,
+      cashierName: cname,
+      cashierKey: String(cid || cname || ""),
+      treasuryId: tr.id,
+      treasuryName: tr.name,
+      openedAt: shiftNowISO(),
+      openingFloat: Number(float) || 0,
+      status: "open",
+      closedAt: null,
+      expectedCash: null,
+      countedCash: null,
+      difference: null,
+      denoms: null,
+      notes: "",
+      settledAt: null,
+      settledBy: null,
+      mainTreasuryId: null,
+      breakdown: { cash: 0, bank: 0, wallet: 0, credit: 0 }
+    };
+    shifts.push(s);
+    try { saveShifts(); } catch (e) {}
+    try { addActivity("فتح وردية", "وردية #" + s.id + " - كاشير " + s.cashierName + " - صندوق " + s.treasuryName + " + رقاقة " + fmt(s.openingFloat) + " ج.م"); } catch (e) {}
+    return { ok: true, shift: s };
   }
 
   // 🛡 بناء 119: جزّة «إعدادات مؤسستك» (بنوك/محافظ) مع نفس رقم الخزينة.
@@ -11451,7 +11584,7 @@
    */
   const BS_OPERATIONAL = ["1.1.1", "1.1.2", "1.1.3", "1.1.4", "1.1.5", "2.1.1", "2.1.2", "2.1.3"];
   // 🆕 بناء 149 (سطر ٤): الاستبعاد يبقى **بالدور** مش بالنص الحرفي — أدلة 6 شركات بلا نقاط خالص
-  // (111 صناديق / 115 مديونيات العملاء / 132 مستحقات الموردين / 133 ��ريبة…) كانت بتتحسب
+  // (111 صناديق / 115 مديونيات العملاء / 132 مستحقات الموردين / 133 ضريبة…) كانت بتتحسب
   // **مرتين** في المركز المالي: مرة من الحركة (خزائن/عملاء/موردين/أصناف) ومرة من الدليل،
   // وده بالظبط «رصيد الحساب في كشف حساب الحسابات ≠ رصيده في قائمة المركز المالي».
   const BS_OP_ROLES = [
@@ -14820,7 +14953,7 @@
     });
     $("#actDelete").addEventListener("click", () => {
       const cust = actionsCust;
-      if (cust.protected || cust.code === "1" || cust.code === "CASH" || cust.id === 1 || (cust.nameAr && cust.nameAr.includes("العميل النقدي"))) {
+      if (cust.protected === true || cust.code === "1" || cust.code === "CASH" || (cust.nameAr && cust.nameAr.includes("العميل النقدي"))) {
         toast("لا يمكن حذف العميل النقدي (كاش) - محمي بالنظام.", "warning");
         return;
       }
@@ -15217,7 +15350,7 @@
     });
     $("#sactDelete").addEventListener("click", () => {
       const s = actionsSupp;
-      if (s.protected || s.code === "1" || s.code === "SUPP-001" || s.id === 1 || (s.nameAr && s.nameAr.includes("المورد النقدي"))) {
+      if (s.protected === true || s.code === "1" || s.code === "SUPP-001" || (s.nameAr && s.nameAr.includes("المورد النقدي"))) {
         toast("لا يمكن حذف المورد النقدي (كاش) - محمي بالنظام.", "warning");
         return;
       }
@@ -15719,7 +15852,7 @@
     });
     // 🛡 بناء 141: مافيش تبويبات «شركة جديدة / لدي رمز دعوة» — الشاشة واحدة ووظيفتها
     // إدخال رمز الدعوة بس (قرار المالك «علشان محدش يعمل حسابات تجريبية»).
-    // أي كود قديم كان بيبدّل بينهم اتشال من ال��لف، فمافيش مسار يورّي خانة اسم شركة.
+    // أي كود قديم كان بيبدّل بينهم اتشال من الملف، فمافيش مسار يورّي خانة اسم شركة.
 
 const pwEye = document.getElementById("btnShowPass");
     if (pwEye) {
@@ -17397,12 +17530,13 @@ const pwEye = document.getElementById("btnShowPass");
         ["catTab", "تبويب التصنيفات"], ["unitTab", "تبويب وحدات القياس"], ["whTab", "تبويب المستودعات"],
         ["walletTab", "تبويب المحافظ الإلكترونية"], ["bankTab", "تبويب حسابات البنوك"], ["ownerTab", "تبويب أصحاب المنشأة"],
         ["docManager", "📁 إدارة مستندات العملاء والموردين"],
-        ["returnsManager", "🔁 إدارة المرتجعات"],
-        ["fixedAssets", "🏭 الأصول الثابتة"]
-        ];
+    ["returnsManager", "🔁 إدارة المرتجعات"],
+    ["fixedAssets", "🏭 الأصول الثابتة"],
+    ["cashierShifts", "🧾 ورديات الكاشير"]
+    ];
 
   // صلاحيات opt-in: owner/سوبر أدمن عندهما دائمًا، والعضو ما عندهاش إلا لو فُعّلت صريحًا
-  const OPT_IN_FEATS = ["clientSettings", "docManager", "returnsManager", "fixedAssets"];
+  const OPT_IN_FEATS = ["clientSettings", "docManager", "returnsManager", "fixedAssets", "cashierShifts"];
 
   /* 🆕 بناء 131 — كاش مزايا الشركات (قراءة واحدة من `organizations.features`).
    * قبل البناء ده كانت نافذة «⚙️ المزايا» بتفتح وكل الصناديق معلّمة (ما بتقرأش
