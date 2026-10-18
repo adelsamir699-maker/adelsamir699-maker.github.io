@@ -6214,6 +6214,8 @@
 
   function posPaymentVisibility() {
     const m = $("#cmbPaymentMethod").value;
+    // 🆕 بناء 191: تغيير وسيلة الدفع يفضّي «المدفوع» — مبلغ قديم كان بيقطّر من حساب العميل
+    if ($("#txtPosPaid")) $("#txtPosPaid").value = "0";
     const isBank = m.includes("بنكي");
     const isWallet = m.includes("محفظة") || m.includes("محافظ");
     $("#fldPosBank").hidden = !isBank;
@@ -6765,6 +6767,32 @@
     return { ajal: ajal, paid: paid, due: due };
   }
 
+  /* 🆕 بناء 191 (بلاغ عميل — شركة محمد رافت): الفاتورة «آجل» + خانة «المدفوع» فيها مبلغ
+     كانت بتتخصم من حساب العميل **بلا أي سؤال** (فاتورة 4,600 آجل نزل على العميل صفر،
+     و3,300 نزل منها 300 بس، والمبلغ البواقي دخل الخزينة كأنه قبض فعلي).
+     القرار: أي «آجل» وفيه مدفوع = سؤال صريح بالأرقام قبل أي أثر، والرفض يرجّع للخانة. */
+  function ajalPaidGate(kind, t) {
+    if (kind !== "sale" && kind !== "purchase") return true;
+    if (!(t && t.paid > 0)) return true;
+    const who = kind === "sale" ? "العميل" : "المورد";
+    const box = kind === "sale" ? "الخزينة" : "الخزينة/حساب الدفع";
+    const inp = $(kind === "sale" ? "#txtPosPaid" : "#txtPPPaid");
+    let msg;
+    if (!(t.due > 0)) {
+      msg = "الفاتورة مختارة «آجل» وخانة «المدفوع» فيها كامل المبلغ (" + fmt(t.grand) + " ج.م).\n\n" +
+        "لو ضغطت «موافق» البرنامج هيسجّلها **قبض/دفع فعلي داخل " + box + "**، و" + who + " مش هيترحل عليه حاجة خالص.\n" +
+        "ولو المقصود إنها آجل بالكامل: اضغط «إلغاء» وفضّي خانة «المدفوع» (خليها 0).";
+    } else {
+      msg = "الفاتورة مختارة «آجل» وفيها مدفوع " + fmt(t.paid) + " ج.م من إجمالي " + fmt(t.grand) + " ج.م.\n\n" +
+        "هيترحل على حساب " + who + ": " + fmt(t.due) + " ج.م بس (الباقي)، و" + fmt(t.paid) + " ج.م هتدخل " + box + ".\n" +
+        "مؤكّد؟ (لو المقصود آجل بالكامل اضغط «إلغاء» وفضّي خانة «المدفوع».)";
+    }
+    if (confirm(msg)) return true;
+    try { if (inp) { inp.value = "0"; inp.focus(); } } catch (e) { }
+    toast("الفاتورة ما اتسجلتش — فضّينا خانة «المدفوع». اختار «آجل» بالكامل أو اكتب المبلغ المقبول قبضه.", "warning");
+    return false;
+  }
+
   function partyBalanceInfo(kind) {
     if (kind === "sale") {
       const c = posFindCustomer($("#cmbPosCustomer").value);
@@ -6915,6 +6943,8 @@
     }
 
     const t = posRecalc();
+    // 🆕 بناء 191: آجل + «مدفوع» = سؤال صريح قبل أي أثر (بلاغ شركة محمد رافت)
+    if (payment === "آجل" && !ajalPaidGate("sale", t)) return;
     const invNo = $("#txtInvoiceNo").value || nextInvoiceNumber();
     const invDate = $("#dtpDate").value || todayISO();
     const invoice = {
@@ -7271,6 +7301,8 @@
 
   function ppPaymentVisibility() {
     const m = $("#cmbPPaymentMethod").value;
+    // 🆕 بناء 191: تغيير وسيلة الدفع يفضّي «المدفوع» (نفس البيع)
+    if ($("#txtPPPaid")) $("#txtPPPaid").value = "0";
     const isBank = m.includes("بنكي");
     const isWallet = m.includes("محفظة") || m.includes("محافظ");
     $("#fldPPBank").hidden = !isBank;
@@ -7542,6 +7574,8 @@
     }
 
     const t = ppRecalc();
+    // 🆕 بناء 191: آجل + «مدفوع» = سؤال صريح قبل أي أثر (نفس البيع)
+    if (payment === "آجل" && !ajalPaidGate("purchase", t)) return;
     const invNo = $("#txtPInvNo").value || nextPurchaseInvoiceNumber();
     const invDate = $("#dtpPDate").value || todayISO();
     const invoice = {
@@ -8192,14 +8226,27 @@
     saveProducts();
     // 2) الأثر المالي
     const pm = String(inv.paymentMethod || "");
+    /* 🆕 بناء 192 (بلاغ عميل 18/10 — شركة محمد رافت): الحذف كان بيدوّر على سطر الطرف بشرط
+       «مبلغ السطر = إجمالي الفاتورة». أي فاتورة آجل فيها دفعة جزء (وده السلوك الصح أصلًا)
+       بيكون سطر العميل = المتبقي بس ⇒ الشرط ما كانش possible يلاقيه ⇒ الفاتورة تتحذف والدين
+       يفضل مكتوب على كشف حسابه، والسطر ده مقفل بحارس 181 («أثر مستند — يتراجع من شاشة المستند»)
+       والمستند نفسه اتحذف ⇒ مافيش أي مخرج للعميل.
+       المفتاح دلوقتي = رقم الفاتورة في الوصف بس، واللي كان داخل الخزينة وقت التسجيل بيرجع لها. */
+    let goneDue = 0;
+    // المفتاح: نفس بادئة الوصف + « رقم <num>» في آخره (مقاس مقابل سطر أطول يبدأ بنفس الرقم)
+    const dueDescOk = (d, word) => {
+      const s = String(d || "");
+      return s.startsWith(word) && s.endsWith(" رقم " + num);
+    };
     if (pm === "آجل") {
       if (isSales) {
         for (let i = txs.length - 1; i >= 0; i--) {
           const t = txs[i];
           if (t && Number(t.customerId) === Number(inv.customerId)
-            && Math.round((Number(t.debit) || 0) * 100) / 100 === amt
-            && String(t.desc || "").includes("فاتورة مبيعات آجلة")
-            && String(t.desc || "").includes(num)) { txs.splice(i, 1); break; }
+            && dueDescOk(t.desc, "فاتورة مبيعات آجلة")) {
+            goneDue = Math.round((goneDue + (Number(t.debit) || 0)) * 100) / 100;
+            txs.splice(i, 1);
+          }
         }
         recalculateCustomerBalances();
         saveCustomers();
@@ -8208,13 +8255,30 @@
         for (let i = supplierTxs.length - 1; i >= 0; i--) {
           const t = supplierTxs[i];
           if (t && Number(t.supplierId) === Number(inv.supplierId)
-            && Math.round((Number(t.debit) || 0) * 100) / 100 === amt
-            && String(t.desc || "").includes("فاتورة مشتريات آجلة")
-            && String(t.desc || "").includes(num)) { supplierTxs.splice(i, 1); break; }
+            && dueDescOk(t.desc, "فاتورة مشتريات آجلة")) {
+            goneDue = Math.round((goneDue + (Number(t.debit) || 0)) * 100) / 100;
+            supplierTxs.splice(i, 1);
+          }
         }
         recalculateSupplierBalances();
         saveSuppliers();
         saveSupplierTxs();
+      }
+      // 🆕 192: الدفعة اللي دخلت الخزينة (بيع) أو خرجت منها (شراء) وقت التسجيل = الإجمالي − المتبقي على الطرف.
+      // قبل كده فرع «آجل» ما كانش بيرجعلها خالص (الاسترجاع كان مكتوب في فرع «نقدي» بس).
+      const gonePaid = Math.round((amt - goneDue) * 100) / 100;
+      if (gonePaid > 0.0001) {
+        const isBank = pm.includes("بنك") || pm.includes("تحويل");
+        const isWallet = pm.includes("محفظ");
+        const type = isBank ? "bank" : isWallet ? "wallet" : "cash";
+        const ptr = treasury.find((x) => x.id === inv.treasuryId)
+          || treasury.find((x) => x.type === type)
+          || treasury.find((x) => x.type === "cash") || treasury[0] || null;
+        if (ptr) {
+          ptr.balance = Math.round(((ptr.balance || 0) + (isSales ? -gonePaid : gonePaid)) * 100) / 100;
+          saveTreasury();
+          syncTreasuryItemToSett(ptr);
+        }
       }
     } else {
       // نقدي/بنك/محفظة: انعكاس حركة الخزينة اللي اتسجلت بيها الفاتورة
@@ -8236,10 +8300,15 @@
     // 3) حذف الفاتورة نفسها + سجل النشاط + تحديث الاستعلام
     if (isSales) { sales = sales.filter((x) => x.id !== inv.id); saveSales(); }
     else { purchases = purchases.filter((x) => x.id !== inv.id); savePurchases(); }
+    // 🆕 بناء 192: النشاط والتوست بيقولوا بالرقم exactly إيه اللي رجع — المتبقي على الطرف والدفعة للخزينة
+    const backTxt = pm === "آجل"
+      ? (" (شيلنا من حساب " + who + " " + fmt(goneDue) + " ج.م" +
+          ((amt - goneDue) > 0.0001 ? "، وردّينا " + fmt(amt - goneDue) + " ج.م للخزينة" : "") + ")")
+      : "";
     addActivity("حذف فاتورة", "حذف فاتورة " + kind + " رقم (" + num + ") - " + who + " - بمبلغ " + fmt(amt) +
-      " ج.م (تراجع كامل للمخزون والأرصدة" + (goneJ ? " والقيد " + goneJ.number : "") + ")");
+      " ج.م (تراجع كامل للمخزون والأرصدة" + (goneJ ? " والقيد " + goneJ.number : "") + ")" + backTxt);
     toast("تم حذف فاتورة (" + num + ") بنجاح وتراجع أثرها بالكامل" +
-      (goneJ ? " بما فيه القيد (" + goneJ.number + ")" : "") + ".", "success");
+      (goneJ ? " بما فيه القيد (" + goneJ.number + ")" : "") + backTxt + ".", "success");
     renderInvoiceQuery();
   }
 
