@@ -46,6 +46,10 @@
   // مندوب يوم معيّن، ثم بيع من السيارة (النقدية تبقى على ذمة المندوب)، ثم تصفية آخر اليوم
   // (الباقي يرجع للمخزن + النقد يورَّد لخزينة يختارها المالك) + تقرير.
   const LS_CAR_TRIPS = "mizan_car_trips_v1";
+  // 🧾 بناء 190 (ترقية ٦٢): الشيكات (أوراق القبض) — الشيك الوارد بيخصم مديونية العميل
+  // **فورًا** ويقف هنا بتاريخ الاستحقاق لحد التحصيل (يدخل خزينة) أو الارتجاع (ترجع المديونية).
+  // المفتاح جوّه LS_ALL_KEYS عمدًا: بيانات شركة ⇒ تتزامن وتُمسح مع تبديل الشركة.
+  const LS_CHECKS = "mizan_checks_v1";
   /* 🧱 بناء 186: «أرضية» أرقام السندات والقيود — أعلى رقم استُخدم ما يتعادش أبدًا.
      السبب: الهوية السحابية (detUuid) **حتمية من الرقم المحلي**؛ فلو الرقم اتعاد استخدامه،
      الصف الجديد ياخد نفس الـ uuid ⇒ upsert يكتب فوق صف قديم. القيود كان عندها JRN_ID_FLOOR
@@ -67,7 +71,7 @@
     LS_CUSTOMERS, LS_TXS, LS_PRODUCTS, LS_ACTIVITY, LS_SALES, LS_TREASURY,
     LS_SUPPLIERS, LS_SUP_TXS, LS_PURCHASES, LS_ACCOUNTS, LS_JOURNAL,
     LS_USERS, LS_VOUCHERS, LS_SALE_RETURNS, LS_PURCHASE_RETURNS, LS_SETTINGS,
-    LS_FIXED_ASSETS, LS_OWNERS, LS_SHIFTS, LS_CAR_TRIPS
+    LS_FIXED_ASSETS, LS_OWNERS, LS_SHIFTS, LS_CAR_TRIPS, LS_CHECKS
   ];
   // 🛡 عزل الشركات: أي مفتاح آخر كتبته بيانات شركة معينة
   // (لو دخل حساب من شركة تانية → البيانات القديمة تُمسح قبل التحميل)
@@ -255,8 +259,13 @@
 
   // الشركات الجديدة تبدأ "بيور": صندوق نقدي واحد برصيد صفر — لا بنوك ولا محافظ ولا أرصدة.
   // صاحب الشركة يضيف حساباته بنفسه من إعدادات مؤسسته.
+  // 🧾 بناء 190 (طلب المالك 19/10): الافتراضي بقى يشمل «المحفظة» (رقم 000000 قابل للتعديل،
+  // والرقم مش بيأثر على الرصيد) + «إنستا باي» نوع مستقل **محمي بالنظام** (ما يغيّروش العميل
+  // ولا يشيله — لأن رصيده بيظهر لوحده في الشاشة الرئيسية).
   const seedTreasury = [
-    { id: 1, name: "الصندوق الرئيسي (نقدي)", type: "cash", balance: 0 }
+    { id: 1, name: "الصندوق الرئيسي", type: "cash", balance: 0 },
+    { id: 2, name: "المحفظة", type: "wallet", accountNo: "000000", balance: 0 },
+    { id: 3, name: "إنستا باي", type: "instapay", balance: 0, system: true }
   ];
 
   const seedSuppliers = [
@@ -286,6 +295,8 @@
     { id: 5, code: "1.1.3", nameAr: "المحافظ الإلكترونية", type: "asset", parentId: 2, openingBalance: 0, isActive: true },
     { id: 6, code: "1.1.4", nameAr: "المخزون (بضاعة)", type: "asset", parentId: 2, openingBalance: 0, isActive: true },
     { id: 7, code: "1.1.5", nameAr: "مديونيات العملاء", type: "asset", parentId: 2, openingBalance: 0, isActive: true },
+    // 🧾 بناء 190 (ترقية ٦٢): أوراق القبض — الشيك الوارد يقف هنا (أصل) لحد التحصيل
+    { id: 24, code: "1.1.7", nameAr: "شيكات لدى العملاء", type: "asset", parentId: 2, openingBalance: 0, isActive: true },
     { id: 8, code: "1.3", nameAr: "الأصول الثابتة", type: "asset", parentId: 1, openingBalance: 0, isActive: true },
     { id: 9, code: "1.3.1", nameAr: "المباني والمعدات", type: "asset", parentId: 8, openingBalance: 0, isActive: true },
     { id: 10, code: "2", nameAr: "الالتزامات", type: "liability", parentId: 0, openingBalance: 0, isActive: true },
@@ -501,6 +512,10 @@
   // 🚚 بناء 178: رحلات سيارات مناديب المبيعات (سيارات السجل نفسها محفوظة في إعدادات العميل
   // تحت المفتاح `cars`، مش هنا؛ هنا بس الرحلات اللي فيها تحميل/بيع/تصفية).
   let carTrips = [];
+  // 🧾 بناء 190: الشيكات (أوراق القبض) — {id, partyKind, customerId, customerName, bankName,
+  // checkNo, dueDate, amount, status:"pending|collected|returned|cancelled", treasuryId,
+  // collectedAt, notes, refType, refId}
+  let checks = [];
   let editingId = null;
 
   /* ================== أدوات ================== */
@@ -968,6 +983,8 @@
     DB.cashier_shifts = shifts;
     // 🚚 بناء 178: رحلات سيارات المناديب
     DB.car_trips = carTrips;
+    // 🧾 بناء 190: الشيكات — النسخ السحابي بيقرأها من MIZAN_STATE.checks
+    DB.checks = checks;
   }
 
   function pushTable(name) {
@@ -1219,8 +1236,18 @@
     p.qty = Math.round(total * 100) / 100;
   }
 
+  /* 🆕 بناء 196 (قاعدة المالك 18/10): الكتابة بقت بالمخزن المحدد بالظبط.
+     `stockAt` (قراءة) يفضل راجع للإجمالي لو اسم المخزن مش في الخريطة — ده قرار «السقف» (ممنوع
+     رفض بيع وفي مخزون) ومش هيتغيّر. بس `addStockAt` (كتابة) ما ينفعش يستخدم نفس الاحتياطي:
+     مقياس قبل التعديل — صنف {الرئيسي:10} وفاتورة على مخزن «فرعي» مش في الخريطة:
+       بيع 2 ⇒ {الرئيسي:10, فرعي:8} والإجمالي 18 (وهم +8!) ⇒ حذفها ⇒ 20 🔴
+     بعد التعديل: بيع 2 ⇒ فرعي = −2 والإجمالي 8 ⇒ حذفها ⇒ فرعي 0 والإجمالي 10 ✅ عكس حرفي.
+     صنف قديم بلا خريطة مخازن: الأساس = الإجمالي الحالي، والنتيجة نفس القيمة ✅ */
   function addStockAt(p, wh, v) {
-    setStockAt(p, wh, stockAt(p, wh) + v);
+    if (!p) return;
+    if (!p.stock || typeof p.stock !== "object") { setStockAt(p, wh, (Number(p.qty) || 0) + v); return; }
+    const raw = Object.prototype.hasOwnProperty.call(p.stock, wh) ? (Number(p.stock[wh]) || 0) : 0;
+    setStockAt(p, wh, raw + v);
   }
 
   function loadData() {
@@ -1253,6 +1280,10 @@
       shifts = JSON.parse(localStorage.getItem(LS_SHIFTS)) || [];
       // 🚚 بناء 178: تحميل رحلات سيارات المناديب
       carTrips = JSON.parse(localStorage.getItem(LS_CAR_TRIPS)) || [];
+      // 🧾 بناء 190: تحميل الشيكات
+      checks = JSON.parse(localStorage.getItem(LS_CHECKS)) || [];
+      // 🧾 بناء 190: «إنستا باي» و«المحفظة» الافتراضيتان لأي شركة قديمة ناقصها (بيانات محلية)
+      ensureDefaultTreasuries();
       TAX.enabled = settings.taxEnabled == null ? TAX.enabled : Boolean(settings.taxEnabled);
       if (settings.taxRate != null) {
         const r = parseFloat(settings.taxRate) || 0;
@@ -1308,6 +1339,7 @@
       if (!localStorage.getItem(LS_FIXED_ASSETS)) saveFixedAssets();
       if (!localStorage.getItem(LS_SHIFTS)) saveShifts();
       if (!localStorage.getItem(LS_CAR_TRIPS)) saveCarTrips();
+      if (!localStorage.getItem(LS_CHECKS)) saveChecks();
       if (!localStorage.getItem(LS_SETTINGS)) saveSettings();
     } catch (e) {
       console.warn("mizan: المتصفح رفض تثبيت الحالة على القرص — البرنامج شغال في الذاكرة", e && e.message);
@@ -1404,6 +1436,30 @@
   function saveCarTrips() {
     localStorage.setItem(LS_CAR_TRIPS, JSON.stringify(carTrips));
     pushTable("car_trips"); syncToLocalDisk();
+  }
+
+  // 🧾 بناء 190: حفظ الشيكات — محلي أولًا ثم رفع سحابي ثم لقطة الديسك
+  function saveChecks() {
+    localStorage.setItem(LS_CHECKS, JSON.stringify(checks));
+    pushTable("checks"); syncToLocalDisk();
+  }
+
+  // 🧾 بناء 190: ضمان وجود «إنستا باي» (خزينة نظام محمية) + «المحفظة» الافتراضية لأي شركة
+  // ناقصاها (شركات قديمة اتعملت قبل الترقية ٦٢). بتتنادى عند التحميل المحلي فقط — والشركات
+  // الجديدة بتاخدهم من بذرة القاعدة/`seedTreasury` أصلًا.
+  function ensureDefaultTreasuries() {
+    try {
+      if (!Array.isArray(treasury)) return;
+      let changed = false;
+      if (!treasury.some((t) => t && t.type === "instapay")) {
+        treasury.push({ id: treasury.reduce((m, x) => Math.max(m, Number(x.id) || 0), 0) + 1,
+          name: "إنستا باي", type: "instapay", balance: 0, system: true });
+        changed = true;
+      } else {
+        treasury.filter((t) => t && t.type === "instapay").forEach((t) => { if (!t.system) { t.system = true; changed = true; } });
+      }
+      if (changed) saveTreasury();
+    } catch (e) { }
   }
 
   function saveActivity() {
@@ -1979,7 +2035,9 @@
     // 🧾 بناء 176: «ورديات الكاشير» — لنفس القائمة (وإلا الزرار يرمي «قيد التطوير»).
     "chartTree", "salesTax", "glLedger", "subLedger", "cashierShifts",
     // 🚚 بناء 178: «سيارات مندوبين المبيعات» — لنفس القائمة (وإلا الزرار يرمي «قيد التطوير»).
-    "vanSales"];
+    "vanSales",
+    // 🧾 بناء 190: تبويب «الشيكات» — لنفس القائمة.
+    "checks"];
 
   // حساب المستخدم الحالي — المصدر الموثوق هو mizan_access (فيه role + is_superadmin)
   // لأن getProfile() قد يكون null أو ناقصًا لحظة الدخول.
@@ -2192,6 +2250,12 @@
       if (isSuperAcct() || isCompanyOwnerAcct()) return true;
       if (!DE.featureFlag) return false;
       return DE.featureFlag("vanSales") === true;
+    }
+    // 🧾 بناء 190: تبويب «الشيكات» — المالك/صاحب الشركة دائمًا، والعضو عند التفعيل الصريح
+    if (name === "checks") {
+      if (isSuperAcct() || isCompanyOwnerAcct()) return true;
+      if (!DE.featureFlag) return false;
+      return DE.featureFlag("checks") === true;
     }
     // 🆕 مهمة 98: سجل الأصول الثابتة — نفس نمط الحضور: المالك وصاحب الشركة دائمًا، والعضو عند التفعيل الصريح
     if (name === "fixedAssets") {
@@ -2571,6 +2635,8 @@
     if (name === "cashierShifts") { shiftBindOnce(); renderShifts(); }
     // 🚚 بناء 178: سيارات مندوبين المبيعات — الربط مرة واحدة ثم الرسم
     if (name === "vanSales") { vanBindOnce(); renderVanSales(); }
+    // 🧾 بناء 190: تبويب الشيكات — الربط مرة واحدة ثم الرسم
+    if (name === "checks") { checksBindOnce(); renderChecks(); }
     // 🧮 بناء 145: الجرد بالباركود — المخزن + الورقة الحالية + حساب الفروق، وكلها من الجهاز
     if (name === "stockCount") scOpenView();
     if (name === "treasuryStatements") { recalculateTreasuryBalances(); renderTreStmt(); }
@@ -2621,6 +2687,8 @@
 
     // 1. وسوم النظام الصريحة (المرتجعات، التحويلات، تسليم الوردية)
     if (rt.indexOf("_return") !== -1 || rt.indexOf("تحويل") !== -1 || rt.indexOf("وردية") === 0) return true;
+    // 🧾 بناء 190: «تحصيل شيك»/«ارتجاع شيك» نقل داخلي (1.1.7 ⇄ خزينة/مديونية) مش إيراد/مصروف
+    if (rt.indexOf("تحصيل شيك") !== -1 || rt.indexOf("ارتجاع شيك") !== -1) return true;
     if (refId.indexOf("TF") === 0 || refId.indexOf("TFV") === 0) return true;
 
     // 2. الكلمات الدالة في الوصف والبيان
@@ -2671,6 +2739,14 @@
     const expToday = vouchers.filter((v) => v.type === "out" && isToday(v.date) && !isMoveVoucher(v)).reduce((m, v) => m + (v.amount || 0), 0);
     const revToday = vouchers.filter((v) => v.type === "in" && isToday(v.date) && !isMoveVoucher(v)).reduce((m, v) => m + (v.amount || 0), 0);
     const treTotal = treasury.reduce((m, t) => m + (t.balance || 0), 0);
+    // 🧾 بناء 190 (طلب المالك 19/10): تفصيل أرصدة الأموال — النقدية لوحدها بغض النظر عن
+    // المحافظ/إنستا باي، وكل واحد رصيد مستقل، والشيكات (لسه تحت التحصيل) سطر لوحده.
+    const kSum = (ty) => Math.round(treasury.filter((t) => t.type === ty).reduce((m, t) => m + (Number(t.balance) || 0), 0) * 100) / 100;
+    const kCash = kSum("cash"), kBank = kSum("bank"), kWallet = kSum("wallet"), kInsta = kSum("instapay");
+    const kChecks = Math.round((Array.isArray(checks) ? checks : [])
+      .filter((c) => c && c.status === "pending" && c.direction !== "out")
+      .reduce((m, c) => m + (Number(c.amount) || 0), 0) * 100) / 100;
+    const kMoney = Math.round((kCash + kBank + kWallet + kInsta + kChecks) * 100) / 100;
 
     $("#kSales").textContent = fmt(salesToday) + " ج.م";
     $("#kPurchases").textContent = fmt(purToday) + " ج.م";
@@ -2690,6 +2766,14 @@
     $("#kMonthProfit").textContent = fmt(profitMonth) + " ج.م";
     paintDir("#kMonthProfit", profitMonth > 0 ? "in" : profitMonth < 0 ? "out" : "");
     $("#kTreasury").textContent = fmt(treTotal) + " ج.م";
+    // 🧾 بناء 190: سطور الأرصدة المفصّلة (بتُلوّن بالأخضر/الأحمر لو سالبة)
+    const setKBal = (id, v) => { const el = $(id); if (el) el.textContent = fmt(v) + " ج.م"; };
+    setKBal("#kCashBal", kCash);
+    setKBal("#kBankBal", kBank);
+    setKBal("#kWalletBal", kWallet);
+    setKBal("#kInstaBal", kInsta);
+    setKBal("#kCheckBal", kChecks);
+    setKBal("#kMoneyTotal", kMoney);
 
     const low = products.filter((pr) => pr.qty <= pr.reorder);
     $("#kLowStock").textContent = low.length.toString();
@@ -2919,6 +3003,8 @@
     $("#pMethod").value = "نقداً 💵";
     $("#pAmount").value = "";
     $("#pNotes").value = "تحصيل دفعة نقداً من حساب العميل";
+    ["#pCheckBank", "#pCheckNo"].forEach((id) => { const el = $(id); if (el) el.value = ""; });
+    const pd = $("#pCheckDue"); if (pd) pd.value = todayISO();
     applyTreasuryFilter();
     updateWalletFields();
     showModal("mPayDebt");
@@ -2926,7 +3012,9 @@
 
   function applyTreasuryFilter() {
     const method = $("#pMethod").value;
-    const type = method.includes("بنكي") ? "bank" : method.includes("محفظة") ? "wallet" : "cash";
+    // 🧾 بناء 190: «شيك» مالوش خزينة — بيتسجّل على حساب 1.1.7 ونخفي قائمة الخزائن ونظهر حقول الشيك
+    const isCheck = method.includes("شيك");
+    const type = method.includes("بنكي") ? "bank" : method.includes("إنستا") ? "instapay" : method.includes("محفظة") ? "wallet" : "cash";
     const sel = $("#pTreasury");
     sel.innerHTML = "";
     treasury.filter((t) => t.type === type).forEach((t) => {
@@ -2934,6 +3022,14 @@
       opt.value = t.id;
       opt.textContent = t.name;
       sel.appendChild(opt);
+    });
+    const trLbl = $("#lblPTreasury");
+    if (trLbl) trLbl.hidden = isCheck;
+    sel.hidden = isCheck;
+    [["#lblPCheckBank", "#pCheckBank"], ["#lblPCheckNo", "#pCheckNo"], ["#lblPCheckDue", "#pCheckDue"]].forEach((pair) => {
+      const l = $(pair[0]), f = $(pair[1]);
+      if (l) l.hidden = !isCheck;
+      if (f) f.hidden = !isCheck;
     });
   }
 
@@ -2970,6 +3066,40 @@
     }
 
     let notes = $("#pNotes").value.trim();
+    // 🧾 بناء 190: تحصيل بشيك — المديونية تقل فورًا، والقيمة تقف على حساب 1.1.7 لحد التحصيل
+    if ($("#pMethod").value.includes("شيك")) {
+      const bank = ($("#pCheckBank").value || "").trim();
+      const cno = ($("#pCheckNo").value || "").trim();
+      const due = $("#pCheckDue").value || todayISO();
+      if (!bank || !cno) { toast("اكتب اسم البنك ورقم الشيك.", "warning"); return; }
+      ensureJrnStd();
+      const chkAcc = checksAcc();
+      const debtAcc = accByCode("1.1.5", "مديونيات العملاء");
+      if (!chkAcc || !debtAcc) { toast("حساب الشيكات/المديونيات ناقص في دليل حساباتك — أكمله من شاشة الحسابات.", "error"); return; }
+      const c2 = customers.find((c) => c.id === cid);
+      c2.currentBalance = Math.round((c2.currentBalance - amount) * 100) / 100;
+      const txId2 = nextTxId();
+      const txRow2 = { id: txId2, customerId: cid, treasuryId: null, paymentMethod: $("#pMethod").value,
+        date: todayISO(), desc: notes || ("تحصيل بشيك #" + cno + " — " + bank), debit: 0, credit: amount };
+      txs.push(txRow2);
+      const chk = addCheck({ customerId: cid, customerName: c2 ? c2.nameAr : "", bankName: bank, checkNo: cno,
+        dueDate: due, amount: amount, refType: "customer_tx", refId: txId2 });
+      const j = { id: nextJournalId(), number: jrnNo(), date: todayISO(),
+        desc: "تحصيل بشيك من " + (c2 ? c2.nameAr : "-") + " — " + fmt(amount) + " ج.م (شيك #" + cno + " — " + bank + ")",
+        ref: "تحصيل بشيك", refType: "تحصيل بشيك", refId: "CHCUST:" + chk.id,
+        debit: amount, credit: amount,
+        lines: [{ accountId: Number(chkAcc.id), debit: amount, credit: 0 }, { accountId: Number(debtAcc.id), debit: 0, credit: amount }] };
+      settleJrnLines(j.lines, 1);
+      journalEntries.push(j);
+      saveCustomers(); saveTxs(); saveChecks(); persistJournal(); saveAccounts();
+      try { renderJournal(); } catch (e) { }
+      hideModal("mPayDebt");
+      addActivity("تحصيل مديونية بشيك", "تحصيل بشيك " + fmt(amount) + " ج.م من " + (c2 ? c2.nameAr : "") + " (استحقاق " + due + ")");
+      toast("تم تسجيل الشيك، والمديونية قلت فورًا — الشيك في تبويب «الشيكات».", "success");
+      renderTable();
+      renderDashboard();
+      return;
+    }
     if ($("#pMethod").value.includes("محفظة")) {
       notes += " | محفظة: من " + $("#pWalletFrom").value.trim() + " إلى " + $("#pWalletTo").value.trim();
     }
@@ -3044,6 +3174,18 @@
     bal.textContent = "الرصيد الحالي (المديونية): " + fmt(cust.currentBalance) + " ج.م";
     bal.className = "act-bal " + (cust.currentBalance > 0 ? "balance-debit" : "balance-credit");
     const isCash = cust.protected === true || cust.code === "1" || cust.code === "CASH";
+    // 🧾 بناء 190: الشيكات المستحقة على العميل (تحت التحصيل) — طلب المالك
+    const ac = $("#actChecks");
+    if (ac) {
+      const pend = checksPendingOf(cust.id, "customer");
+      if (pend.length) {
+        ac.hidden = false;
+        ac.innerHTML = "🧾 شيكات مستحقة عليه (" + pend.length + "): " +
+          pend.map((c) => fmt(round2(c.amount)) + " («" + esc(c.bankName || "-") + "» #" + esc(c.checkNo || "-") +
+            " — " + esc(c.dueDate || "-") + ")").join(" · ") +
+          " — الإجمالي " + fmt(checksPendingTotalOf(cust.id, "customer")) + " ج.م";
+      } else { ac.hidden = true; ac.textContent = ""; }
+    }
     const btnDel = $("#actDelete");
     if (btnDel) {
       btnDel.disabled = isCash;
@@ -4797,15 +4939,13 @@
     return pct + " %";
   }
 
-  function renderProducts() {
-    fillSelect("#cmbProductCategory", ["الكل"].concat(productCategories()), $("#cmbProductCategory").value || "الكل");
-
+  /* 🆕 بناء 197: مصدر فرز واحد — كانت الفرزة جوّه `renderProducts` بس.
+     دلوقتي `renderProducts` وتصدير Excel بينادوا نفس الدالة نفسها، فمستحيل
+     الملف ينزّل حاجة مختلفة عن اللي ظاهر قدامك على الشاشة. */
+  function productsFilteredList() {
     const q = normalizeAr($("#txtProductSearch").value);
     const cat = $("#cmbProductCategory").value;
-    const tbody = $("#dgvProducts tbody");
-    tbody.innerHTML = "";
-
-    const filtered = products.filter((p) => {
+    return products.filter((p) => {
       if (cat !== "الكل" && p.category !== cat) return false;
       if (!q) return true;
       return (
@@ -4822,6 +4962,15 @@
         (p.isActive ? "نشط" : "معطل").includes(q)
       );
     });
+  }
+
+  function renderProducts() {
+    fillSelect("#cmbProductCategory", ["الكل"].concat(productCategories()), $("#cmbProductCategory").value || "الكل");
+
+    const tbody = $("#dgvProducts tbody");
+    tbody.innerHTML = "";
+
+    const filtered = productsFilteredList();
 
     filtered.forEach((p) => {
       const tr = document.createElement("tr");
@@ -4857,6 +5006,214 @@
       tr.addEventListener("dblclick", () => openProductDialog(p));
       tbody.appendChild(tr);
     });
+  }
+
+  /* ================== 🆕 بناء 197: تنزيل الأصناف في ملف Excel ==================
+   * طلب المالك الحرفي (19/10): «عايز انزل الاصناف الموجوده بالبرنامج فى ملف اكسيل»
+   * وقال «ابدا» على **العيار ٣** = ملف `.xlsx` حقيقي + تصدير حسب الفلتر الظاهر +
+   * عمود لكل مخزن + إجمالي قيمة المخزون.
+   *
+   * خمس قواعد حاكمة (كسر أي واحدة منها بيلغي الفائدة كلها):
+   *  (١) **مصدر فرز واحد** — `productsFilteredList()` بيناديها `renderProducts` والتصدير،
+   *      فالملف المستخرَج = اللي ظاهر قدامك بالحرف (فلترت على «البقالة» ⇒ أصناف البقالة بس).
+   *  (٢) **عناوين الأعمدة = نفس الأسماء اللي بتتعرف عليها شاشة «رفع بيانات Excel»**
+   *      (`excel_import.js` → `TABLES.products`) ⇒ تنزّل ⇒ تعدّل في إكسل ⇒ ترفع، من غير ما
+   *      خانة تضيع. والأعمدة اللي للعرض بس («رصيد مخزن: …» / «الخصم» / «قيمة المخزون»)
+   *      مقصود أسماء **بره** قائمة المترادفات، فالقارئ بيتجاهلها ببلاش وما بيرمش «عمود مكرر».
+   *  (٣) **الورقة الأولى = الأصناف فقط**، والإجماليات في ورقة تانية — عشان سطر الإجمالي
+   *      ما يتقراش صنفًا جديدًا لو الملف اترفع تاني.
+   *  (٤) **الأرقام أرقام مش نص** (`numFmt` للعرض بس) ⇒ بتتحسب في إكسل، و`normalizeValue`
+   *      بتاع القارئ بترجّعها أرقام زي ما هي.
+   *  (٥) التنزيل بنمط البيت (`appendChild` + `revokeObjectURL` متأجّل ثانية) — **مش** نمط
+   *      `downloadCSV` اللي بيفصل الرابط قبل ما التنزيل يلحق يمسكه.
+   */
+
+  /* مواصفات الأعمدة — **ترتيبها = ترتيب الأعمدة على شاشة «دليل الأصناف» بالحرف**
+   * (طلب المالك 19/10: «و تكون بنفس ترتيب الاعمده»):
+   *   كود الصنف · الباركود · اسم الصنف · التصنيف · الوحدة · الرصيد الحالي · آخر سعر شراء ·
+   *   متوسط سعر الشراء · سعر البيع · الخصم · الحالة
+   * وبعدها باقي حقول الرفع (الاسم بالإنجليزية · سعر الشراء · حد التنبيه) ثم رصيد كل مخزن ثم
+   * قيمة المخزون. «الرصيد الحالي» على الشاشة بقت «الكمية الحالية» و«الحالة» بقت «حالة النشاط»
+   * لأن دول بس الاسماء اللي شاشة «رفع بيانات Excel» بتعرفها (مترادفات `stock_qty`
+   * و`is_active`) — فالملف ينزل يتعدّل ويرفع. الأعمدة للعرض بس («الخصم» / «قيمة المخزون» /
+   * «رصيد مخزن: …») أسماء مقصودها بره قائمة المترادفات ⇒ القارئ بيتجاهلها ببلاش.
+   * كل عمود ليه مفتاح `k` واحد ⇒ المجاميع وتنسيق الأرقام بيتحسبوا من نفس الجدول، فمستحيل
+   * مؤشر غلط يطلع (درس البناء ده: المؤشرات المكتوبة يدويًا اتزحلقت خانات واحدة).
+   */
+  function productsExportSpec(whs) {
+    const spec = [
+      { h: "كود الصنف", k: "code" },
+      { h: "الباركود", k: "barcode" },
+      { h: "اسم الصنف", k: "nameAr" },
+      { h: "التصنيف", k: "category" },
+      { h: "الوحدة", k: "unit" },
+      { h: "الكمية الحالية", k: "qty", num: "#,##0" },
+      { h: "آخر سعر شراء", k: "last", num: "#,##0.00" },
+      { h: "متوسط سعر الشراء", k: "avg", num: "#,##0.00" },
+      { h: "سعر البيع", k: "sale", num: "#,##0.00" },
+      { h: "الخصم", k: "disc" },
+      { h: "حالة النشاط", k: "active" },
+      { h: "اسم الصنف بالإنجليزية", k: "nameEn" },
+      { h: "سعر الشراء", k: "buy", num: "#,##0.00" },
+      { h: "حد التنبيه", k: "reorder", num: "#,##0" },
+    ];
+    whs.forEach((w) => { spec.push({ h: "رصيد مخزن: " + w, k: "wh:" + w, num: "#,##0" }); });
+    spec.push({ h: "قيمة المخزون", k: "value", num: "#,##0.00" });
+    return spec;
+  }
+
+  /* رقم عمود بالمفتاح — المصدر الوحيد للمؤشرات (`-1` معناه المفتاح مش موجود). */
+  function productsExportCol(spec, k) {
+    for (let i = 0; i < spec.length; i++) if (spec[i].k === k) return i;
+    return -1;
+  }
+
+  // الأعمدة الرقمية وتنسيقها — `[مؤشر العمود (0-based)، قالب العرض]` مولّدة من المواصفات.
+  function productsExportNumericCols(spec) {
+    const out = [];
+    spec.forEach((s, i) => { if (s.num) out.push([i, s.num]); });
+    return out;
+  }
+
+  /* صفوف التصدير: `{ list, whs, spec, heads, rows, numCols }` — مصدر واحد للبيانات والمجاميع. */
+  function productsExportData() {
+    const list = productsFilteredList();
+    const whs = warehouseList();
+    const spec = productsExportSpec(whs);
+    const heads = spec.map((s) => s.h);
+    const numCols = productsExportNumericCols(spec);
+
+    const rows = list.map((p) => {
+      const avg = Number(avgPriceOf(p)) || 0;
+      const qty = Number(p.qty) || 0;
+      const val = round2(qty * avg);
+      const cell = (k, w) => {
+        if (k === "code") return String(p.code == null ? "" : p.code);
+        if (k === "barcode") return String(bcDigits(p.barcode) || "");
+        if (k === "nameAr") return String(p.nameAr || "");
+        if (k === "nameEn") return String(p.nameEn || "");
+        if (k === "category") return String(p.category || "");
+        if (k === "unit") return String(p.unit || "");
+        if (k === "disc") return String(discountStatusText(p) || "");
+        if (k === "active") return p.isActive ? "نعم" : "لا";
+        if (k === "qty") return qty;
+        if (k === "last") return Number(lastPriceOf(p)) || 0;
+        if (k === "avg") return avg;
+        if (k === "sale") return Number(p.salePrice) || 0;
+        if (k === "buy") return Number(p.purchasePrice) || 0;
+        if (k === "reorder") return Number(p.reorder) || 0;
+        if (k === "value") return val;
+        if (k.slice(0, 3) === "wh:") return Number(stockAt(p, k.slice(3))) || 0;
+        return "";
+      };
+      return spec.map((s) => cell(s.k, s.h));
+    });
+
+    return { list, whs, spec, heads, rows, numCols };
+  }
+
+  /* مجاميع ورقة «الإجمالي» — محسوبة من نفس `d.rows` اللي اتنزلت، ومن نفس المواصفات. */
+  function productsExportTotals(d) {
+    const i = (k) => productsExportCol(d.spec, k);
+    const IQ = i("qty"), IV = i("value"), IS = i("sale"), IB = i("barcode"), IA = i("active"), IM = i("reorder");
+    let qty = 0, value = 0, saleValue = 0, noBarcode = 0, inactive = 0, lowStock = 0;
+    d.rows.forEach((r) => {
+      qty = round2(qty + (Number(r[IQ]) || 0));
+      value = round2(value + (Number(r[IV]) || 0));
+      saleValue = round2(saleValue + (Number(r[IQ]) || 0) * (Number(r[IS]) || 0));
+      if (!String(r[IB]).trim()) noBarcode++;
+      if (r[IA] === "لا") inactive++;
+      if ((Number(r[IQ]) || 0) <= (Number(r[IM]) || 0)) lowStock++;
+    });
+    return { count: d.rows.length, qty, value, saleValue, noBarcode, inactive, lowStock };
+  }
+
+  function productsExcelDownload(filename, buffer) {
+    const blob = new Blob([new Uint8Array(buffer)], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => { URL.revokeObjectURL(url); }, 1000);
+    return blob.size;
+  }
+
+  function productsExcelFileName(d) {
+    const t = new Date();
+    const pad = (n) => (n < 10 ? "0" + n : String(n));
+    const scope = $("#cmbProductCategory").value !== "الكل" ? "_" + $("#cmbProductCategory").value : "";
+    const q = String($("#txtProductSearch").value || "").trim();
+    const stamp = t.getFullYear() + "-" + pad(t.getMonth() + 1) + "-" + pad(t.getDate()) +
+      "_" + pad(t.getHours()) + "-" + pad(t.getMinutes());
+    return "اصناف_" + d.list.length + "صنف" + scope + (q ? "_بحث" : "") + "_" + stamp + ".xlsx";
+  }
+
+  async function exportProductsExcel() {
+    if (!(window.ExcelJS && window.ExcelJS.Workbook)) {
+      toast("أداة ملفات الإكسل ما اتحمّلتش على الجهاز ده — قفل الصفحة وافتحها من جديد ثم حاول.", "warning");
+      return;
+    }
+    const d = productsExportData();
+    if (!d.rows.length) {
+      toast("مافيش أصناف في العرض الحالي — امسح كلمة البحث أو اختار «الكل» الأول.", "info");
+      return;
+    }
+    let t = null;
+    try {
+      const wb = new ExcelJS.Workbook();
+      wb.created = new Date();
+      wb.title = "أصناف " + invOrgName();
+
+      const ws = wb.addWorksheet("الأصناف", { views: [{ rightToLeft: true, state: "frozen", ySplit: 1 }] });
+      ws.columns = d.heads.map((h) => ({ header: h, width: h.length > 14 ? 22 : Math.max(11, h.length + 4) }));
+      const headRow = ws.getRow(1);
+      headRow.font = { bold: true };
+      headRow.alignment = { vertical: "middle", horizontal: "center" };
+      headRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDCE6F1" } };
+      headRow.commit();
+      d.rows.forEach((r) => {
+        const row = ws.addRow(r);
+        d.numCols.forEach((nc) => { row.getCell(nc[0] + 1).numFmt = nc[1]; });
+      });
+      ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: d.heads.length } };
+
+      t = productsExportTotals(d);
+      const su = wb.addWorksheet("الإجمالي", { views: [{ rightToLeft: true }] });
+      su.columns = [{ header: "البيان", width: 30 }, { header: "القيمة", width: 22 }];
+      su.getRow(1).font = { bold: true };
+      const lines = [
+        ["الشركة", invOrgName()],
+        ["عدد الأصناف في الملف", t.count],
+        ["إجمالي الكميات", t.qty],
+        ["إجمالي قيمة المخزون (بالمتوسط)", t.value],
+        ["إجمالي قيمة المخزون (بثمن البيع)", t.saleValue],
+        ["أصناف بلا باركود", t.noBarcode],
+        ["أصناف معطلة", t.inactive],
+        ["أصناف عند حد التنبيه أو أقل", t.lowStock],
+        ["التصنيف المعروض", $("#cmbProductCategory").value],
+        ["كلمة البحث", String($("#txtProductSearch").value || "").trim() || "—"],
+        ["عدد المخازن", d.whs.length],
+        ["وقت التنزيل", new Date().toLocaleString("en-GB")],
+      ];
+      lines.forEach((l) => {
+        const row = su.addRow(l);
+        if (typeof l[1] === "number") row.getCell(2).numFmt = "#,##0.00";
+      });
+
+      productsExcelDownload(productsExcelFileName(d), await wb.xlsx.writeBuffer());
+    } catch (e) {
+      toast("ملف الإكسل ما اتجهّزش — جرّب مرة تانية، ولو اتكرّر قفل الصفحة وافتحها.", "warning");
+      return;
+    }
+    addActivity("تنزيل أصناف Excel",
+      "ملف Excel فيه " + t.count + " صنف (قيمة المخزون " + fmt(t.value) + ") — التصنيف: " +
+      $("#cmbProductCategory").value + "، البحث: " + (String($("#txtProductSearch").value || "").trim() || "—"));
+    toast("نزّلنا لك ملف الإكسل فيه " + t.count + " صنف (قيمة المخزون " + fmt(t.value) + ").", "success");
   }
 
   /* ---- حذف صنف: مسموح فقط إذا كان رصيده صفر في كل المستودعات ---- */
@@ -5911,7 +6268,12 @@
     try { renderProducts(); } catch (e) { }
 
     // ٢) قيد الفروق — نفس بدائل بناء 134 (تسوية سطر-سطر + refId يمنع التكرار)
-    let jrnNo = "";
+    // 🔴 إصلاح 197 (باگ حيّ مقاس في كروم): المتغير المحلي كان اسمه `jrnNo` ⇒ **بيحجب**
+    // دالة بناء 186 `jrnNo(id)` (رقم القيد مشتق من الـ id). النداء `jrnNo()` على نص فاضي
+    // كان بيرمي «TypeError: jrnNo is not a function» **بعد** ما المخزون اتعدّل و`saveProducts()`
+    // عدّى ⇒ الورقة تتطبّع في المخزون من غير قيد، ومن غير `appliedAt` ومن غير `scPersist()`
+    // ⇒ «اعتماد الجرد» يكمل نصه ويسيب الدفتر بلا قيد فروق. الاسم بقى `jrnNoText`.
+    let jrnNoText = "";
     if (plan.lines.length) {
       const j = {
         id: nextJournalId(),
@@ -5929,18 +6291,18 @@
       journalEntries.push(j);
       persistJournal();
       saveAccounts();
-      jrnNo = j.number;
+      jrnNoText = j.number;
       try { renderJournal(); } catch (e) { }
     }
     sh.appliedAt = new Date().toISOString();
-    sh.appliedJrn = jrnNo;
+    sh.appliedJrn = jrnNoText;
     sh.diffAcc = $("#scDiffAcc") ? String($("#scDiffAcc").value || "") : sh.diffAcc;
     scPersist();
-    addActivity("اعتماد جرد بالباركود", "ورق " + sh.no + " — مخزن («" + sh.wh + "») — " + plan.rows.length + " صنف — فروق " + fmt(plan.total) + " ج.م" + (jrnNo ? " — قيد " + jrnNo : " — بلا قيد"));
+    addActivity("اعتماد جرد بالباركود", "ورق " + sh.no + " — مخزن («" + sh.wh + "») — " + plan.rows.length + " صنف — فروق " + fmt(plan.total) + " ج.م" + (jrnNoText ? " — قيد " + jrnNoText : " — بلا قيد"));
     renderStockCount();
     try { renderDashboard(); } catch (e) { }
     toast("✅ اعتمدنا الجرد: " + plan.rows.length + " صنف اتسوّى في («" + sh.wh + "»)" +
-      (jrnNo ? " و اتكتب القيد " + jrnNo : " (الفروق متزنينة — مافيش قيد)") + ".", "success");
+      (jrnNoText ? " و اتكتب القيد " + jrnNoText : " (الفروق متزنينة — مافيش قيد)") + ".", "success");
   }
 
   /* ---- نقل الأصناف بين المخازن ---- */
@@ -6028,6 +6390,9 @@
   let posInitialized = false;
   let ppItems = [];
   let ppInitialized = false;
+  /* 🧾 بناء 190: طرق السداد المتعددة في الفاتورة (نقدي/بنك/محفظة/إنستا/شيك + سطور إضافية للباقي) */
+  let posExtraPays = [];
+  let ppExtraPays = [];
 
   // 🔢 ترقيم الفواتير: عدد صحيح لكل شركة يبدأ من ١ بلا حروف ولا يتكرر.
   // الأساس = أعلى رقم مستخدم فعليًا في بيانات الشركة الحالية (sales/purchases)،
@@ -6263,24 +6628,23 @@
 
   function posPaymentVisibility() {
     const m = $("#cmbPaymentMethod").value;
+    const mode = posPayMode(m);
     // 🆕 بناء 191: تغيير وسيلة الدفع يفضّي «المدفوع» — مبلغ قديم كان بيقطّر من حساب العميل
     if ($("#txtPosPaid")) $("#txtPosPaid").value = "0";
-    const isBank = m.includes("بنكي");
-    const isWallet = m.includes("محفظة") || m.includes("محافظ");
-    $("#fldPosBank").hidden = !isBank;
-    $("#fldPosWallet").hidden = !isWallet;
-    const fill = (sel, type) => {
-      const s = $(sel);
-      s.innerHTML = "";
-      treasury.filter((t) => t.type === type).forEach((t) => {
-        const o = document.createElement("option");
-        o.value = t.id;
-        o.textContent = t.name;
-        s.appendChild(o);
-      });
-    };
-    if (isBank) fill("#cmbPosBank", "bank");
-    if (isWallet) fill("#cmbPosWallet", "wallet");
+    // 🧾 بناء 190: تغيير طريقة الدفع يصفّر سطور السداد الإضافية (تبدأ جديدة مع الطريقة الجديدة)
+    posExtraPays = [];
+    $("#fldPosBank").hidden = !mode.isBank;
+    $("#fldPosWallet").hidden = !mode.isWallet;
+    const fldInsta = $("#fldPosInsta"); if (fldInsta) fldInsta.hidden = !mode.isInsta;
+    const fldChk = $("#fldPosCheck"); if (fldChk) fldChk.hidden = !mode.isCheck;
+    const cb = $("#txtPosCheckBank"); if (cb && !mode.isCheck) cb.value = "";
+    const cn = $("#txtPosCheckNo"); if (cn && !mode.isCheck) cn.value = "";
+    const cd = $("#txtPosCheckDue"); if (cd) cd.value = mode.isCheck ? (cd.value || todayISO()) : todayISO();
+    if (mode.isBank) posFillTreasurySelect($("#cmbPosBank"), "bank", null);
+    if (mode.isWallet) posFillTreasurySelect($("#cmbPosWallet"), "wallet", null);
+    if (mode.isInsta) posFillTreasurySelect($("#cmbPosInsta"), "instapay", null);
+    posRenderExtraPays("sale");
+    posBindExtraPays("sale");
     posPaymentFieldToggle("sale");
     posRecalc();
   }
@@ -6803,17 +7167,188 @@
      • الآجل = الإجمالى − المدفوع، ويُرحَّل لحساب الطرف **الآجل فقط**.
      • الرصيد السابق من نفس رصيد كشف الطرف (currentBalance)، والحالي = السابق + الآجل.
      • الألوان: المديون/المستحق أحمر، المدفوع/الرصيد لنا أخضر. */
-  function partyPaidDue(kind, grand) {
+  /* 🧾 بناء 190 — منظومة السداد المتعدّد في الفاتورة:
+     الطريقة الأساسية (نقدي/بنك/محفظة/إنستا) + سطور سداد إضافية للباقي، و«شيك» يقف على
+     حساب 1.1.7. كل سطر بيترحّل لحسابه (`invoiceJrnPlan` بيقرأ `inv.payments`). */
+  function posExtraArr(kind) { return kind === "sale" ? posExtraPays : ppExtraPays; }
+  function posPayMode(method) {
+    const m = String(method || "");
+    return {
+      isCheck: m.includes("شيك"),
+      isBank: m.includes("بنكي") || m.includes("بنك"),
+      isWallet: m.includes("محفظ") || m.includes("محافظ"),
+      isInsta: m.includes("إنستا") || m.includes("انستا"),
+      isAjal: m === "آجل"
+    };
+  }
+  const POS_PAY_METHODS = ["نقداً", "تحويل بنكي", "محافظ إلكترونية", "إنستا باي", "شيك"];
+  const PP_PAY_METHODS = ["نقداً", "تحويل بنكي", "محافظ إلكترونية", "إنستا باي"];
+  function posExtraAmount(p) {
+    const n = parseFloat(String(p && p.amount != null ? p.amount : "").replace(/,/g, ""));
+    return isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
+  }
+  function posTreasuryForPay(kind, p) {
+    const mode = posPayMode(p && p.method);
+    if (mode.isCheck) return null;
+    const wantType = mode.isBank ? "bank" : mode.isInsta ? "instapay" : mode.isWallet ? "wallet" : "cash";
+    let tr = (p && p.treasuryId != null) ? treasury.find((x) => Number(x.id) === Number(p.treasuryId)) : null;
+    if (!tr || tr.type !== wantType) tr = treasury.find((x) => x.type === wantType) || null;
+    if (!tr && wantType === "cash") {
+      const ash = (typeof activeShift === "function") ? activeShift() : null;
+      if (ash) tr = treasury.find((x) => Number(x.id) === Number(ash.treasuryId)) || tr;
+    }
+    if (!tr) tr = treasury.find((x) => x.type === "cash") || treasury[0] || null;
+    return tr;
+  }
+  function posFillTreasurySelect(el, type, selectedId) {
+    if (!el) return;
+    el.innerHTML = "";
+    treasury.filter((t) => t.type === type).forEach((t) => {
+      const o = document.createElement("option");
+      o.value = t.id;
+      o.textContent = t.name;
+      el.appendChild(o);
+    });
+    if (selectedId != null && selectedId !== "") el.value = String(selectedId);
+  }
+  function posPrimaryEntry(kind) {
     const methodSel = kind === "sale" ? "#cmbPaymentMethod" : "#cmbPPaymentMethod";
     const paidInpSel = kind === "sale" ? "#txtPosPaid" : "#txtPPPaid";
-    const ajal = ($(methodSel).value === "آجل");
+    const method = $(methodSel).value;
+    const mode = posPayMode(method);
     const raw = parseFloat(String($(paidInpSel).value).replace(/,/g, ""));
-    let paid = ajal ? (isFinite(raw) ? raw : 0) : grand;
+    const entry = { method: method, treasuryId: null, bankName: "", checkNo: "", dueDate: "", amount: isFinite(raw) ? raw : 0 };
+    if (mode.isCheck) {
+      entry.bankName = (($("#txtPosCheckBank") || { value: "" }).value || "").trim();
+      entry.checkNo = (($("#txtPosCheckNo") || { value: "" }).value || "").trim();
+      entry.dueDate = ($("#txtPosCheckDue") || { value: "" }).value || todayISO();
+    } else if (mode.isBank || mode.isInsta || mode.isWallet) {
+      const sel = kind === "sale"
+        ? (mode.isBank ? "#cmbPosBank" : mode.isInsta ? "#cmbPosInsta" : "#cmbPosWallet")
+        : (mode.isBank ? "#cmbPPBank" : mode.isInsta ? "#cmbPPInsta" : "#cmbPPWallet");
+      const el = $(sel);
+      entry.treasuryId = el ? (parseInt(el.value, 10) || null) : null;
+    }
+    return entry;
+  }
+  // يرجّع قائمة سطور السداد مُطبَّعة (المجموع ≤ الإجمالي، ولغير آجل/شيك = الإجمالي بالكامل)
+  function posCollectPayments(kind, grand) {
+    const prim = posPrimaryEntry(kind);
+    const mode = posPayMode(prim.method);
+    const extras = posExtraArr(kind)
+      .map((p) => ({
+        method: p.method || "نقداً", amount: posExtraAmount(p),
+        treasuryId: (p.treasuryId != null ? p.treasuryId : null),
+        bankName: p.bankName || "", checkNo: p.checkNo || "", dueDate: p.dueDate || ""
+      }))
+      .filter((p) => p.amount > 0);
+    const extrasTotal = round2(extras.reduce((m, p) => m + p.amount, 0));
+    let primaryAmt = (mode.isAjal || mode.isCheck) ? round2(Math.max(prim.amount, 0)) : round2(grand - extrasTotal);
+    if (primaryAmt < 0) primaryAmt = 0;
+    const list = [Object.assign({}, prim, { amount: primaryAmt })];
+    extras.forEach((e) => list.push(e));
+    let over = round2(list.reduce((m, p) => m + p.amount, 0) - grand);
+    for (let i = list.length - 1; i >= 0 && over > 0.001; i--) {
+      const d = Math.min(list[i].amount, over);
+      list[i].amount = round2(list[i].amount - d);
+      over = round2(over - d);
+    }
+    let clean = list.filter((p) => p.amount > 0.0001);
+    if (!mode.isAjal && !mode.isCheck) {
+      const sum = round2(clean.reduce((m, p) => m + p.amount, 0));
+      if (sum < grand) {
+        if (clean.length) clean[0].amount = round2(clean[0].amount + (grand - sum));
+        else clean = [Object.assign({}, prim, { amount: round2(grand) })];
+      }
+    }
+    return { list: clean, mode: mode };
+  }
+  function partyPaidDue(kind, grand) {
+    const cp = posCollectPayments(kind, grand);
+    let paid = round2(cp.list.reduce((m, p) => m + p.amount, 0));
     if (!(paid >= 0)) paid = 0;
-    if (paid > grand) paid = grand;
-    paid = Math.round(paid * 100) / 100;
-    const due = Math.round((grand - paid) * 100) / 100;
-    return { ajal: ajal, paid: paid, due: due };
+    if (paid > grand) paid = round2(grand);
+    const due = round2(grand - paid);
+    return { ajal: cp.mode.isAjal, paid: paid, due: due, payments: cp.list };
+  }
+  function posRenderExtraPays(kind) {
+    const listEl = $(kind === "sale" ? "#posPayExtraList" : "#ppPayExtraList");
+    if (!listEl) return;
+    const arr = posExtraArr(kind);
+    const methods = kind === "sale" ? POS_PAY_METHODS : PP_PAY_METHODS;
+    listEl.innerHTML = "";
+    arr.forEach((p, i) => {
+      const mode = posPayMode(p.method);
+      const row = document.createElement("div");
+      row.className = "pay-line";
+      row.dataset.idx = i;
+      row.innerHTML =
+        '<select class="pl-method">' + methods.map((m) => '<option' + (m === p.method ? ' selected' : '') + '>' + esc(m) + '</option>').join('') + '</select>' +
+        '<select class="pl-treasury"' + (mode.isCheck ? ' hidden' : '') + '></select>' +
+        '<input class="pl-bank" type="text" placeholder="اسم البنك" value="' + esc(p.bankName || '') + '"' + (mode.isCheck ? '' : ' hidden') + ' />' +
+        '<input class="pl-no" type="text" placeholder="رقم الشيك" value="' + esc(p.checkNo || '') + '"' + (mode.isCheck ? '' : ' hidden') + ' />' +
+        '<input class="pl-due" type="date" value="' + esc(p.dueDate || todayISO()) + '"' + (mode.isCheck ? '' : ' hidden') + ' />' +
+        '<input class="pl-amount" type="text" placeholder="المبلغ" value="' + esc(p.amount == null ? '' : p.amount) + '" autocomplete="off" />' +
+        '<button class="btn small red" type="button" data-pldel="1" title="حذف السطر">❌</button>';
+      listEl.appendChild(row);
+      if (!mode.isCheck) {
+        const wantType = mode.isBank ? "bank" : mode.isInsta ? "instapay" : mode.isWallet ? "wallet" : "cash";
+        posFillTreasurySelect(row.querySelector(".pl-treasury"), wantType, p.treasuryId);
+      }
+    });
+  }
+  function posAddExtraPay(kind) {
+    const grand = kind === "sale" ? posRecalc().grand : ppRecalc().grand;
+    const cur = partyPaidDue(kind, grand);
+    const remain = round2(Math.max(cur.due, 0));
+    posExtraArr(kind).push({ method: "نقداً", amount: remain > 0 ? remain : "", treasuryId: null, bankName: "", checkNo: "", dueDate: todayISO() });
+    posRenderExtraPays(kind);
+    if (kind === "sale") posRecalc(); else ppRecalc();
+  }
+  function posBindExtraPays(kind) {
+    const listEl = $(kind === "sale" ? "#posPayExtraList" : "#ppPayExtraList");
+    const addBtn = $(kind === "sale" ? "#btnPosAddPay" : "#btnPPAddPay");
+    const refresh = () => { if (kind === "sale") posRecalc(); else ppRecalc(); };
+    if (addBtn && !addBtn.__bound) { addBtn.__bound = true; addBtn.addEventListener("click", () => posAddExtraPay(kind)); }
+    if (listEl && !listEl.__bound) {
+      listEl.__bound = true;
+      listEl.addEventListener("change", (e) => {
+        const row = e.target.closest(".pay-line"); if (!row) return;
+        const p = posExtraArr(kind)[parseInt(row.dataset.idx, 10)]; if (!p) return;
+        if (e.target.classList.contains("pl-method")) {
+          p.method = e.target.value;
+          const mode = posPayMode(p.method);
+          const trSel = row.querySelector(".pl-treasury"), bk = row.querySelector(".pl-bank"), no = row.querySelector(".pl-no"), due = row.querySelector(".pl-due");
+          if (trSel) trSel.hidden = mode.isCheck;
+          if (bk) bk.hidden = !mode.isCheck;
+          if (no) no.hidden = !mode.isCheck;
+          if (due) due.hidden = !mode.isCheck;
+          if (!mode.isCheck) {
+            const wantType = mode.isBank ? "bank" : mode.isInsta ? "instapay" : mode.isWallet ? "wallet" : "cash";
+            posFillTreasurySelect(trSel, wantType, null);
+            p.treasuryId = trSel ? (parseInt(trSel.value, 10) || null) : null;
+          } else { p.treasuryId = null; p.dueDate = p.dueDate || todayISO(); }
+        } else if (e.target.classList.contains("pl-treasury")) p.treasuryId = parseInt(e.target.value, 10) || null;
+        else if (e.target.classList.contains("pl-bank")) p.bankName = e.target.value;
+        else if (e.target.classList.contains("pl-no")) p.checkNo = e.target.value;
+        else if (e.target.classList.contains("pl-due")) p.dueDate = e.target.value;
+        refresh();
+      });
+      listEl.addEventListener("input", (e) => {
+        if (!e.target.classList.contains("pl-amount")) return;
+        const row = e.target.closest(".pay-line"); if (!row) return;
+        const p = posExtraArr(kind)[parseInt(row.dataset.idx, 10)]; if (!p) return;
+        p.amount = e.target.value;
+        refresh();
+      });
+      listEl.addEventListener("click", (e) => {
+        if (!e.target.closest("[data-pldel]")) return;
+        const row = e.target.closest(".pay-line"); if (!row) return;
+        posExtraArr(kind).splice(parseInt(row.dataset.idx, 10), 1);
+        posRenderExtraPays(kind);
+        refresh();
+      });
+    }
   }
 
   /* 🆕 بناء 191 (بلاغ عميل — شركة محمد رافت): الفاتورة «آجل» + خانة «المدفوع» فيها مبلغ
@@ -6891,9 +7426,11 @@
   }
 
   function posPaymentFieldToggle(kind) {
-    const ajal = ($(kind === "sale" ? "#cmbPaymentMethod" : "#cmbPPaymentMethod").value === "آجل");
+    const m = $(kind === "sale" ? "#cmbPaymentMethod" : "#cmbPPaymentMethod").value;
+    const mode = posPayMode(m);
     const row = $(kind === "sale" ? "#posPaidRow" : "#ppPaidRow");
-    if (row) row.hidden = !ajal;
+    // 🧾 بناء 190: خانة «المدفوع» تظهر للآجل وللشيك (مبلغ الشيك)، وتُشتق بقية الطرق تلقائيًا
+    if (row) row.hidden = !(mode.isAjal || mode.isCheck);
   }
 
   function posRecalc() {
@@ -6919,7 +7456,7 @@
     posPaymentFieldToggle("sale");
     posUpdatePartyBalance("sale");
     posUpdateSummary("sale", { grand: grand, paid: pd.paid, due: pd.due });
-    return { sub: sub, tax: tax, extra: extra, grand: grand, paid: pd.paid, due: pd.due };
+    return { sub: sub, tax: tax, extra: extra, grand: grand, paid: pd.paid, due: pd.due, payments: pd.payments };
   }
 
   function renderPosItems() {
@@ -6961,8 +7498,7 @@
         return;
       }
     }
-    const methods = ["نقداً", "آجل", "تحويل بنكي", "محافظ إلكترونية"];
-    const payment = methods[$("#cmbPaymentMethod").selectedIndex] || "نقداً";
+    const payment = $("#cmbPaymentMethod").value || "نقداً";
     const custId = posCustId();
     const cust = customers.find((c) => c.id === custId);
     if (!cust) {
@@ -7037,31 +7573,61 @@
 
     // 🆕 بناء 158: حارس «لا ترحيل بلا حساب» — القياسي يتأمّن، وغير القياسي لو ناقص يمنع الحفظ
     ensureJrnStd();
-    // 🆕 (طلب المالك) السداد الجزئي: أى جزء «مدفوع» يدخل الخزينة/البنك/المحفظة، والآجل فقط يُضاف لرصيد العميل
-    const _isBank = payment === "تحويل بنكي" || payment.includes("بنك");
-    const _isWallet = payment === "محافظ إلكترونية" || payment.includes("محفظ");
-    const _payType = _isBank ? "bank" : _isWallet ? "wallet" : "cash";
-    const _selId = _isBank ? parseInt($("#cmbPosBank").value, 10) : _isWallet ? parseInt($("#cmbPosWallet").value, 10) : 0;
-    let posTr = (_selId && treasury.find((x) => x.id === _selId))
-      || treasury.find((x) => x.type === _payType)
-      || treasury.find((x) => x.type === "cash") || treasury[0] || null;
-    // 🧾 بناء 176: وردية الكاشير — البيع النقدي يدخل صندوق الكاشير (الوردية المفتوحة)،
-    // وباقي الوسائل (بنك/محفظة) تدخل حساباتها المرجعية زي ما هي.
-    const _ash176 = activeShift();
-    if (_ash176 && _payType === "cash") {
-      const _box176 = treasury.find((x) => Number(x.id) === Number(_ash176.treasuryId));
-      if (_box176) posTr = _box176;
-    }
-    if (jrnBlocked("الفاتورة", invoiceJrnPlan("sale", { grandTotal: t.grand, taxAmount: t.tax, paymentMethod: payment, paidAmount: t.paid, dueAmount: t.due }, posTr))) return;
-
-    let paidTreasury = null;               // 🆕 بناء 134: الحساب اللي القبض دخل فيه
-
-    if (t.paid > 0 && posTr) {
-      posTr.balance = Math.round(((posTr.balance || 0) + t.paid) * 100) / 100;
-      invoice.treasuryId = posTr.id;
-      paidTreasury = posTr;                 // 🆕 بناء 134: الطرف المقابل في القيد هو نفس الحساب اللي القبض دخل فيه
+    // 🧾 بناء 190: منظومة السداد المتعدّد (نقدي/بنك/محفظة/إنستا باي + «شيك» على حساب 1.1.7)
+    const _payLines = Array.isArray(t.payments) ? t.payments : [];
+    const _isMulti = _payLines.some((p) => posPayMode(p.method).isCheck) || _payLines.length > 1;
+    let posTr = null;
+    let paidTreasury = null;
+    if (_isMulti) {
+      invoice.payments = _payLines.map((p) => {
+        const md = posPayMode(p.method);
+        return {
+          method: md.isCheck ? "check" : md.isBank ? "bank" : md.isInsta ? "instapay" : md.isWallet ? "wallet" : "cash",
+          amount: round2(p.amount), treasuryId: (p.treasuryId != null ? p.treasuryId : null),
+          bankName: p.bankName || "", checkNo: p.checkNo || "", dueDate: p.dueDate || ""
+        };
+      });
+      if (jrnBlocked("الفاتورة", invoiceJrnPlan("sale", invoice, null))) return;
+      for (const p of _payLines) {
+        const md = posPayMode(p.method);
+        if (md.isCheck) {
+          addCheck({ customerId: cust.id, customerName: cust.nameAr, bankName: p.bankName || "", checkNo: p.checkNo || "",
+            dueDate: p.dueDate || todayISO(), amount: round2(p.amount), refType: "invoice", refId: String(invoice.invoiceNumber || invNo) });
+          continue;
+        }
+        const _tr = posTreasuryForPay("sale", p);
+        if (_tr) {
+          _tr.balance = round2((_tr.balance || 0) + round2(p.amount));
+          if (!invoice.treasuryId) { invoice.treasuryId = _tr.id; paidTreasury = _tr; }
+        }
+      }
       saveTreasury();
-      syncTreasuryItemToSett(posTr);
+      _payLines.forEach((p) => { if (!posPayMode(p.method).isCheck) { const _tr = posTreasuryForPay("sale", p); if (_tr) syncTreasuryItemToSett(_tr); } });
+    } else {
+      const _isBank = payment === "تحويل بنكي" || payment.includes("بنك");
+      const _isWallet = payment === "محافظ إلكترونية" || payment.includes("محفظ");
+      const _isInsta = payment.includes("إنستا");
+      const _payType = _isBank ? "bank" : _isInsta ? "instapay" : _isWallet ? "wallet" : "cash";
+      const _selId = _isBank ? parseInt($("#cmbPosBank").value, 10) : _isInsta ? parseInt($("#cmbPosInsta").value, 10) : _isWallet ? parseInt($("#cmbPosWallet").value, 10) : 0;
+      posTr = (_selId && treasury.find((x) => x.id === _selId))
+        || treasury.find((x) => x.type === _payType)
+        || treasury.find((x) => x.type === "cash") || treasury[0] || null;
+      // 🧾 بناء 176: وردية الكاشير — البيع النقدي يدخل صندوق الكاشير (الوردية المفتوحة)،
+      // وباقي الوسائل (بنك/محفظة) تدخل حساباتها المرجعية زي ما هي.
+      const _ash176 = activeShift();
+      if (_ash176 && _payType === "cash") {
+        const _box176 = treasury.find((x) => Number(x.id) === Number(_ash176.treasuryId));
+        if (_box176) posTr = _box176;
+      }
+      if (jrnBlocked("الفاتورة", invoiceJrnPlan("sale", { grandTotal: t.grand, taxAmount: t.tax, paymentMethod: payment, paidAmount: t.paid, dueAmount: t.due }, posTr))) return;
+
+      if (t.paid > 0 && posTr) {
+        posTr.balance = Math.round(((posTr.balance || 0) + t.paid) * 100) / 100;
+        invoice.treasuryId = posTr.id;
+        paidTreasury = posTr;                 // 🆕 بناء 134: الطرف المقابل في القيد هو نفس الحساب اللي القبض دخل فيه
+        saveTreasury();
+        syncTreasuryItemToSett(posTr);
+      }
     }
     if (t.due > 0) {
       cust.currentBalance = Math.round(((Number(cust.currentBalance) || 0) + t.due) * 100) / 100;
@@ -7350,24 +7916,19 @@
 
   function ppPaymentVisibility() {
     const m = $("#cmbPPaymentMethod").value;
+    const mode = posPayMode(m);
     // 🆕 بناء 191: تغيير وسيلة الدفع يفضّي «المدفوع» (نفس البيع)
     if ($("#txtPPPaid")) $("#txtPPPaid").value = "0";
-    const isBank = m.includes("بنكي");
-    const isWallet = m.includes("محفظة") || m.includes("محافظ");
-    $("#fldPPBank").hidden = !isBank;
-    $("#fldPPWallet").hidden = !isWallet;
-    const fill = (sel, type) => {
-      const s = $(sel);
-      s.innerHTML = "";
-      treasury.filter((t) => t.type === type).forEach((t) => {
-        const o = document.createElement("option");
-        o.value = t.id;
-        o.textContent = t.name;
-        s.appendChild(o);
-      });
-    };
-    if (isBank) fill("#cmbPPBank", "bank");
-    if (isWallet) fill("#cmbPPWallet", "wallet");
+    // 🧾 بناء 190: تصفير سطور السداد الإضافية
+    ppExtraPays = [];
+    $("#fldPPBank").hidden = !mode.isBank;
+    $("#fldPPWallet").hidden = !mode.isWallet;
+    const fldInsta = $("#fldPPInsta"); if (fldInsta) fldInsta.hidden = !mode.isInsta;
+    if (mode.isBank) posFillTreasurySelect($("#cmbPPBank"), "bank", null);
+    if (mode.isWallet) posFillTreasurySelect($("#cmbPPWallet"), "wallet", null);
+    if (mode.isInsta) posFillTreasurySelect($("#cmbPPInsta"), "instapay", null);
+    posRenderExtraPays("purchase");
+    posBindExtraPays("purchase");
     posPaymentFieldToggle("purchase");
     ppRecalc();
   }
@@ -7574,7 +8135,7 @@
     posPaymentFieldToggle("purchase");
     ppUpdatePartyBalance("purchase");
     posUpdateSummary("purchase", { grand: grand, paid: pd.paid, due: pd.due });
-    return { sub: sub, tax: tax, extra: extra, grand: grand, paid: pd.paid, due: pd.due };
+    return { sub: sub, tax: tax, extra: extra, grand: grand, paid: pd.paid, due: pd.due, payments: pd.payments };
   }
 
   function renderPPItems() {
@@ -7604,8 +8165,7 @@
       toast("يرجى إضافة أصناف إلى الفاتورة أولاً.", "warning");
       return;
     }
-    const methods = ["نقداً", "آجل", "تحويل بنكي", "محافظ إلكترونية"];
-    const payment = methods[$("#cmbPPaymentMethod").selectedIndex] || "نقداً";
+    const payment = $("#cmbPPaymentMethod").value || "نقداً";
     const supId = posSupId();
     const supplier = suppliers.find((s) => s.id === supId);
     if (!supplier) {
@@ -7666,28 +8226,58 @@
 
     // 🆕 بناء 158: حارس «لا ترحيل بلا حساب» — القياسي يتأمّن، وغير القياسي لو ناقص يمنع الحفظ
     ensureJrnStd();
-    // 🆕 (طلب المالك) السداد الجزئي: أى جزء «مدفوع» يخرج من الخزينة/البنك/المحفظة، والآجل فقط يُضاف لرصيد المورد
-    const _isBank = payment === "تحويل بنكي" || payment.includes("بنك");
-    const _isWallet = payment === "محافظ إلكترونية" || payment.includes("محفظ");
-    const _payType = _isBank ? "bank" : _isWallet ? "wallet" : "cash";
-    const _selId = _isBank ? parseInt($("#cmbPPBank").value, 10) : _isWallet ? parseInt($("#cmbPPWallet").value, 10) : 0;
-    const ppTr = (_selId && treasury.find((x) => x.id === _selId))
-      || treasury.find((x) => x.type === _payType)
-      || treasury.find((x) => x.type === "cash") || treasury[0] || null;
-    if (jrnBlocked("الفاتورة", invoiceJrnPlan("purchase", { grandTotal: t.grand, taxAmount: t.tax, paymentMethod: payment, paidAmount: t.paid, dueAmount: t.due }, ppTr))) return;
-
-    let paidTreasury = null;               // 🆕 بناء 134: الحساب اللي الصرف خرج منه
-
-    if (t.paid > 0 && ppTr) {
-      // 🆕 بناء 174: تحذير نقص الرصيد قبل الصرف (نفس باقي الشاشات — بلا قصّ صامت)
-      if (round2(ppTr.balance) < round2(t.paid)) {
-        if (!confirm(shortfallText(ppTr, t.paid) + "\n\nهل تريد تسجيل فاتورة المشتريات من «" + ppTr.name + "» رغم ذلك؟")) return;
+    // 🧾 بناء 190: سطور سداد متعدّدة للمشتريات (نقدي/بنك/محفظة/إنستا — الشيكات للعملاء فقط)
+    const _ppPayLines = Array.isArray(t.payments) ? t.payments : [];
+    const _ppMulti = _ppPayLines.length > 1;
+    let ppTr = null;
+    let paidTreasury = null;
+    if (_ppMulti) {
+      invoice.payments = _ppPayLines.map((p) => {
+        const md = posPayMode(p.method);
+        return {
+          method: md.isBank ? "bank" : md.isInsta ? "instapay" : md.isWallet ? "wallet" : "cash",
+          amount: round2(p.amount), treasuryId: (p.treasuryId != null ? p.treasuryId : null)
+        };
+      });
+      if (jrnBlocked("الفاتورة", invoiceJrnPlan("purchase", invoice, null))) return;
+      // تحذير نقص الرصيد مجمّعًا على الخزينة المطلوبة
+      for (const p of _ppPayLines) {
+        const _tr = posTreasuryForPay("purchase", p);
+        if (_tr && round2(_tr.balance) < round2(p.amount)) {
+          if (!confirm(shortfallText(_tr, p.amount) + "\n\nهل تريد تسجيل فاتورة المشتريات من «" + _tr.name + "» رغم ذلك؟")) return;
+        }
       }
-      ppTr.balance = Math.round(((ppTr.balance || 0) - t.paid) * 100) / 100;
-      invoice.treasuryId = ppTr.id;
-      paidTreasury = ppTr;                 // 🆕 بناء 134: الطرف المقابل في القيد = نفس حساب الصرف
+      for (const p of _ppPayLines) {
+        const _tr = posTreasuryForPay("purchase", p);
+        if (_tr) {
+          _tr.balance = round2((_tr.balance || 0) - round2(p.amount));
+          if (!invoice.treasuryId) { invoice.treasuryId = _tr.id; paidTreasury = _tr; }
+        }
+      }
       saveTreasury();
-      syncTreasuryItemToSett(ppTr);
+      _ppPayLines.forEach((p) => { const _tr = posTreasuryForPay("purchase", p); if (_tr) syncTreasuryItemToSett(_tr); });
+    } else {
+      const _isBank = payment === "تحويل بنكي" || payment.includes("بنك");
+      const _isWallet = payment === "محافظ إلكترونية" || payment.includes("محفظ");
+      const _isInsta = payment.includes("إنستا");
+      const _payType = _isBank ? "bank" : _isInsta ? "instapay" : _isWallet ? "wallet" : "cash";
+      const _selId = _isBank ? parseInt($("#cmbPPBank").value, 10) : _isInsta ? parseInt($("#cmbPPInsta").value, 10) : _isWallet ? parseInt($("#cmbPPWallet").value, 10) : 0;
+      ppTr = (_selId && treasury.find((x) => x.id === _selId))
+        || treasury.find((x) => x.type === _payType)
+        || treasury.find((x) => x.type === "cash") || treasury[0] || null;
+      if (jrnBlocked("الفاتورة", invoiceJrnPlan("purchase", { grandTotal: t.grand, taxAmount: t.tax, paymentMethod: payment, paidAmount: t.paid, dueAmount: t.due }, ppTr))) return;
+
+      if (t.paid > 0 && ppTr) {
+        // 🆕 بناء 174: تحذير نقص الرصيد قبل الصرف (نفس باقي الشاشات — بلا قصّ صامت)
+        if (round2(ppTr.balance) < round2(t.paid)) {
+          if (!confirm(shortfallText(ppTr, t.paid) + "\n\nهل تريد تسجيل فاتورة المشتريات من «" + ppTr.name + "» رغم ذلك؟")) return;
+        }
+        ppTr.balance = Math.round(((ppTr.balance || 0) - t.paid) * 100) / 100;
+        invoice.treasuryId = ppTr.id;
+        paidTreasury = ppTr;                 // 🆕 بناء 134: الطرف المقابل في القيد = نفس حساب الصرف
+        saveTreasury();
+        syncTreasuryItemToSett(ppTr);
+      }
     }
     if (t.due > 0) {
       supplier.currentBalance = Math.round(((Number(supplier.currentBalance) || 0) + t.due) * 100) / 100;
@@ -7703,6 +8293,27 @@
       saveSuppliers();
       saveSupplierTxs();
     }
+
+    // 🆕 بناء 196 (قاعدة المالك 18/10): لقطة أسعار التكلفة **قبل** أي لمس — عشان «حذف الفاتورة
+    // يرجّع كل حاجة لحسابها كان الفاتورة متعملتش خالص». اللقطة دي هي المرجع الوحيد للترجيع:
+    // المتوسط/سعر الشراء بيتحسبوا من الكميات، فأي محاولة إعادة حساب من جديد بعد الحذف بتدي
+    // رقم مختلف (مقياس: 3 سطور بنفس الصنف والكميات ⇒ متوسط 100/103.33/106.67 حسب الترتيب).
+    // بتتخزن على الفاتورة نفسها في localStorage وفي لقطة الديسك (مش عمود سحابي — `sales/purchases`
+    // مالهمش عمودات مدفوع/متبقي، فأي إضافة عمود = ترقية مستنية «نفّذ»).
+    invoice.costBefore = ppItems.map((it) => {
+      const p = products.find((x) => Number(x.id) === Number(it.productId));
+      if (!p) return null;
+      const snap = {
+        productId: p.id,
+        weightedAvgCost: Number(p.weightedAvgCost),
+        avgPurchasePrice: Number(p.avgPurchasePrice),
+        purchasePrice: Number(p.purchasePrice),
+        lastPurchasePrice: Number(p.lastPurchasePrice)
+      };
+      const anyNum = [snap.weightedAvgCost, snap.avgPurchasePrice, snap.purchasePrice, snap.lastPurchasePrice]
+        .some((n) => Number.isFinite(n));
+      return anyNum ? snap : null;
+    }).filter(Boolean);
 
     ppItems.forEach((it) => {
       const p = products.find((x) => Number(x.id) === Number(it.productId));
@@ -8319,47 +8930,117 @@
         saveSuppliers();
         saveSupplierTxs();
       }
-      // 🆕 192: الدفعة اللي دخلت الخزينة (بيع) أو خرجت منها (شراء) وقت التسجيل = الإجمالي − المتبقي على الطرف.
-      // قبل كده فرع «آجل» ما كانش بيرجعلها خالص (الاسترجاع كان مكتوب في فرع «نقدي» بس).
-      const gonePaid = Math.round((amt - goneDue) * 100) / 100;
-      if (gonePaid > 0.0001) {
-        const isBank = pm.includes("بنك") || pm.includes("تحويل");
-        const isWallet = pm.includes("محفظ");
-        const type = isBank ? "bank" : isWallet ? "wallet" : "cash";
-        const ptr = treasury.find((x) => x.id === inv.treasuryId)
-          || treasury.find((x) => x.type === type)
-          || treasury.find((x) => x.type === "cash") || treasury[0] || null;
-        if (ptr) {
-          ptr.balance = Math.round(((ptr.balance || 0) + (isSales ? -gonePaid : gonePaid)) * 100) / 100;
-          saveTreasury();
-          syncTreasuryItemToSett(ptr);
+    }
+    /* 🆕 بناء 196 (قاعدة المالك 18/10 بحرفه): «لو عملت حذف مش ارتجاع لفاتورة عميل دافع جزء وعليه جزء،
+       الحذف يخلي كل حاجة ترجع لحسابها كأن الفاتورة متعملتش خالص: النقدي بنفس القيمة، حساب العميل
+       بنفس القيمة، المخزون بنفس القيمة» — والمرتجع هو اللي بيدي اختيار حسابات، الحذف مافيش فيه اختيار.
+       فقيمة اللي دخل/خرج من الخزينة بتتقاس بترتيب مصداقية ثابت (ممنوع التخمين):
+         ١) سطر الطرف اللي شلناه من الكشف: المتبقي على العميل/المورد ⇒ الدفعة = الإجمالي − المتبقي.
+            ده أدق مصدر لأنه الرقم اللي اتسجّل وقت الفاتورة نفسه، و`description/debit` بيمشّي المزامنة.
+         ٢) قيد الفاتورة (بناء 134): بيع = مجموع المدين − سطر «مديونيات العملاء» · شراء = مجموع
+            الدائن − سطر «مستحقات الموردين» — يُستعمل لو مافيش سطر طرف (مدفوع بالكامل أو سطر ضايع).
+         ٣) حقل paidAmount على الفاتورة — موجود على الجهاز اللي سجّلها بس، وجدول sales/purchases
+            مالوش أعمدة للمدفوع/المتبقي (مقياس cloud.js:463-505) ⇒ يُستخدم بس لو الحقل موجود فعلًا.
+         ٤) احتياط أخير: الإجمالي.
+       والصندوق اللي الفلوس ترجع له: inv.treasuryId (بينزل ويرجع من السحابة بمقياس نفس الملف) ⇒
+       نوع حساب القيد ⇒ نوع وسيلة الدفع ⇒ الصندوق النقدي ⇒ أول خزينة.
+       🚚 استثناء مقيس: بيع المندوب (بناء 178) قبضه بيرحّل لحساب «ذمم المناديب» مش لصندوق —
+       فالقيد لو بيقول حساب مش خزينة، الحذف ما يلمسش أي خزينة (الكشف بيتراجع في removeInvoiceJournal). */
+    const r2n = (n) => Math.round(Number(n || 0) * 100) / 100;
+    const dueAcc = accByCode(isSales ? "1.1.5" : "2.1.1", isSales ? "مديونيات العملاء" : "مستحقات الموردين");
+    const jOfInv = invoiceJrnOf(isSales ? "sale" : "purchase", inv);
+    let paidFromJrn = null, paidAccId = null;
+    if (jOfInv && Array.isArray(jOfInv.lines) && jOfInv.lines.length) {
+      let side = 0, dueSide = 0;
+      jOfInv.lines.forEach((l) => {
+        const v = r2n(isSales ? (l && l.debit) : (l && l.credit));
+        if (!(v > 0)) return;
+        side = r2n(side + v);
+        if (dueAcc && Number(l.accountId) === Number(dueAcc.id)) dueSide = r2n(dueSide + v);
+        else if (paidAccId == null) paidAccId = Number(l.accountId);
+      });
+      const cand = r2n(side - dueSide);
+      if (cand >= 0 && cand <= r2n(amt)) paidFromJrn = cand;
+    }
+    const isBank = pm.includes("بنك") || pm.includes("تحويل");
+    const isWallet = pm.includes("محفظ");
+    const pmType = isBank ? "bank" : isWallet ? "wallet" : "cash";
+    // نوع الحساب من كوده الدليلي (accByCode بيلفظ الأدلة المجرّدة والمرادفات — مقياس بناء 149)
+    const typeOfAccId = (id) => {
+      if (id == null || isNaN(Number(id))) return "";
+      const pairs = [["bank", "1.1.2", "البنوك"], ["wallet", "1.1.3", "المحافظ"], ["cash", "1.1.1", "الصناديق"]];
+      for (const p of pairs) {
+        const a = accByCode(p[1], p[2]);
+        if (a && Number(a.id) === Number(id)) return p[0];
+      }
+      return "";
+    };
+    // 🧭 ترتيب المصادر (مقيّس، مش تفضيل شخصي):
+    //  (أ) الطرف أمانة: السطر اللي شلناه من كشف حسابه = المتبقي ⇒ الدفعة = الإجمالي − المتبقي.
+    //      ده أدق مصدر لأنه نفس الرقم اللي اتسجّل وقت الفاتورة وبيمشي مع المزامنة.
+    //  (ب) القيد: لو مافيش سطر طرف (مدفوع بالكامل/سطر ضايع) ⇒ مجموع المدين − سطر الطرف.
+    //  (ج) حقل paidAmount على الفاتورة (بينزل من السحابة بدون الحقل ⇒ يُستخدم بس لو موجود فعلًا).
+    //  (د) احتياط: آجل بلا سطر = الإجمالي (شكل باگ 191)، وغير الآجل = الإجمالي كله.
+    const hasPaidField = Object.prototype.hasOwnProperty.call(inv, "paidAmount") && Number.isFinite(Number(inv.paidAmount));
+    let gonePaid = null;
+    if (pm === "آجل" && goneDue > 0.0001) gonePaid = r2n(Math.max(0, r2n(amt) - goneDue));
+    if (gonePaid == null && paidFromJrn != null) gonePaid = paidFromJrn;
+    if (gonePaid == null && hasPaidField) gonePaid = r2n(Number(inv.paidAmount));
+    if (gonePaid == null) gonePaid = pm === "آجل" ? r2n(Math.max(0, amt - goneDue)) : r2n(amt);
+    if (gonePaid < 0) gonePaid = 0;
+    if (gonePaid > r2n(amt)) gonePaid = r2n(amt);
+    let ptr = null, ptrNotTreasury = false;
+    if (gonePaid > 0.0001) {
+      if (inv.treasuryId != null && inv.treasuryId !== "") {
+        ptr = treasury.find((x) => Number(x.id) === Number(inv.treasuryId)) || null;
+      }
+      if (!ptr) {
+        const jType = paidAccId != null ? typeOfAccId(paidAccId) : "";
+        // 🚚 بيع المندوب (بناء 178): القبض راح لحساب «ذمم المناديب» وصندوقه = null بالذات
+        ptrNotTreasury = !!inv.isVan || (paidFromJrn != null && paidAccId != null && jType === "");
+        if (!ptrNotTreasury) {
+          const want = jType || pmType;
+          ptr = treasury.find((x) => x.type === want) || treasury.find((x) => x.type === "cash") || treasury[0] || null;
         }
       }
-    } else {
-      // نقدي/بنك/محفظة: انعكاس حركة الخزينة اللي اتسجلت بيها الفاتورة
-      let tr = treasury.find((x) => x.id === inv.treasuryId);
-      if (!tr) {
-        const isBank = pm.includes("بنك") || pm.includes("تحويل");
-        const isWallet = pm.includes("محفظ");
-        const type = isBank ? "bank" : isWallet ? "wallet" : "cash";
-        tr = treasury.find((x) => x.type === type) || treasury.find((x) => x.type === "cash") || treasury[0];
-      }
-      if (tr) {
-        tr.balance = Math.round(((tr.balance || 0) + (isSales ? -amt : amt)) * 100) / 100;
+      if (ptr) {
+        ptr.balance = r2n((Number(ptr.balance) || 0) + (isSales ? -gonePaid : gonePaid));
         saveTreasury();
-        syncTreasuryItemToSett(tr);
+        syncTreasuryItemToSett(ptr);
       }
+    }
+    // 🆕 193: تكلفة الشراء ترجع زي ما كانت قبل الفاتورة (متوسطة/آخر شراء) — لو اللقطة محفوظة
+    let costBack = 0;
+    if (!isSales && Array.isArray(inv.costBefore) && inv.costBefore.length) {
+      inv.costBefore.forEach((c) => {
+        const p = products.find((x) => Number(x.id) === Number(c.productId));
+        if (!p) return;
+        if (Number.isFinite(Number(c.weightedAvgCost))) p.weightedAvgCost = Number(c.weightedAvgCost);
+        if (Number.isFinite(Number(c.avgPurchasePrice))) p.avgPurchasePrice = Number(c.avgPurchasePrice);
+        if (Number.isFinite(Number(c.purchasePrice))) p.purchasePrice = Number(c.purchasePrice);
+        if (Number.isFinite(Number(c.lastPurchasePrice))) p.lastPurchasePrice = Number(c.lastPurchasePrice);
+        costBack++;
+      });
+      saveProducts();
     }
     // 🆕 بناء 134: القيد اللي اتترحّل مع الفاتورة بيرجع معاه (تسوية الأرصدة بتلغى سطر-سطر)
     const goneJ = removeInvoiceJournal(isSales ? "sale" : "purchase", inv);
     // 3) حذف الفاتورة نفسها + سجل النشاط + تحديث الاستعلام
     if (isSales) { sales = sales.filter((x) => x.id !== inv.id); saveSales(); }
     else { purchases = purchases.filter((x) => x.id !== inv.id); savePurchases(); }
-    // 🆕 بناء 192: النشاط والتوست بيقولوا بالرقم exactly إيه اللي رجع — المتبقي على الطرف والدفعة للخزينة
-    const backTxt = pm === "آجل"
-      ? (" (شيلنا من حساب " + who + " " + fmt(goneDue) + " ج.م" +
-          ((amt - goneDue) > 0.0001 ? "، وردّينا " + fmt(amt - goneDue) + " ج.م للخزينة" : "") + ")")
-      : "";
+    /* 🆕 بناء 196: السطر ده بقى يتبني من **الأرقام اللي رجعت فعلًا** (`gonePaid` للخزينة،
+       `goneDue` للطرف، `costBack` للتكلفة) — مش من «الإجمالي − المتبقي» ولا بشرط «آجل» وحده.
+       قاعدة المالك: «الحذف يخلي كل حاجة ترجع لحسابها كان الفاتورة متعملتش خالص».
+       ممنوع أي اصطلاح تقني للعميل — بصيغة ودّية فيها الاسم والمبلغ بس. */
+    const bits = [];
+    if (goneDue > 0.0001) bits.push("شيلنا من حساب " + who + " " + fmt(goneDue) + " ج.م");
+    if (gonePaid > 0.0001) {
+      if (ptr) bits.push((isSales ? "وطلعنا " : "وردّينا ") + fmt(gonePaid) + " ج.م " + (isSales ? "من" : "لـ") + " «" + ptr.name + "»");
+      else if (ptrNotTreasury) bits.push("ورجّعنا دفعة " + fmt(gonePaid) + " ج.م على حسابها اللي اتدفعت منه (مش صندوق)");
+      else bits.push("وردّينا " + fmt(gonePaid) + " ج.م للحساب اللي اتدفعت منه");
+    }
+    if (costBack > 0) bits.push("ورجّعنا أسعار التكلفة لـ " + costBack + " صنف");
+    const backTxt = bits.length ? (" (" + bits.join("، ") + ")") : "";
     addActivity("حذف فاتورة", "حذف فاتورة " + kind + " رقم (" + num + ") - " + who + " - بمبلغ " + fmt(amt) +
       " ج.م (تراجع كامل للمخزون والأرصدة" + (goneJ ? " والقيد " + goneJ.number : "") + ")" + backTxt);
     toast("تم حذف فاتورة (" + num + ") بنجاح وتراجع أثرها بالكامل" +
@@ -9253,7 +9934,7 @@ id: nextVoucherId(),
       })
       .forEach((t) => {
         const tr = document.createElement("tr");
-        const typeName = t.type === "cash" ? "صندوق نقدي 💵" : t.type === "bank" ? "حساب بنكي 🏛️" : "محفظة 📱";
+        const typeName = t.type === "cash" ? "صندوق نقدي 💵" : t.type === "bank" ? "حساب بنكي 🏛️" : t.type === "instapay" ? "إنستا باي ⚡" : "محفظة 📱";
         const tTotals = totals[t.id] || { in: 0, out: 0 };
         tr.innerHTML =
           '<td hidden></td>' +
@@ -9269,6 +9950,224 @@ id: nextVoucherId(),
       });
   }
 
+  /* ================== 🧾 بناء 190 — تبويب الشيكات (رسم + ربط) ================== */
+  let checksFilter = { q: "", status: "pending", sort: "due" };
+  let checksBound = false;
+  let checkCollectId = null;
+  function checkStatusLabel(st) {
+    return st === "collected" ? "اتحصّل ✅" : st === "returned" ? "مرتجع ⛔" : st === "cancelled" ? "ملغي" : "تحت التحصيل ⏳";
+  }
+  function checkStatusClass(st) {
+    return st === "collected" ? "balance-debit" : st === "returned" ? "balance-credit" : "";
+  }
+  function checksQuery() {
+    const q = normalizeAr(checksFilter.q);
+    let list = checks.filter((c) => c);
+    if (checksFilter.status !== "all") list = list.filter((c) => (c.status || "pending") === checksFilter.status);
+    if (q) list = list.filter((c) => normalizeAr(c.customerName).includes(q) || normalizeAr(c.bankName).includes(q) ||
+      normalizeAr(c.checkNo).includes(q) || normalizeAr(c.dueDate).includes(q));
+    if (checksFilter.sort === "dueDesc") return checkDueSort(list).reverse();
+    if (checksFilter.sort === "name") return list.slice().sort((a, b) => normalizeAr(a.customerName).localeCompare(normalizeAr(b.customerName), "ar"));
+    if (checksFilter.sort === "bank") return list.slice().sort((a, b) => normalizeAr(a.bankName).localeCompare(normalizeAr(b.bankName), "ar"));
+    if (checksFilter.sort === "amount") return list.slice().sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0));
+    return checkDueSort(list); // الافتراضي: الأقرب استحقاقًا أولًا
+  }
+  function renderChecks() {
+    const tb = $("#dgvChecks tbody");
+    if (!tb) return;
+    tb.innerHTML = "";
+    checksQuery().forEach((c) => {
+      const tr = document.createElement("tr");
+      const pend = (c.status || "pending") === "pending";
+      tr.innerHTML =
+        '<td>' + esc(c.dueDate || "—") + '</td>' +
+        '<td>' + esc(c.customerName || "—") + '</td>' +
+        '<td>' + esc(c.bankName || "—") + '</td>' +
+        '<td>' + esc(c.checkNo || "—") + '</td>' +
+        '<td>' + fmt(round2(c.amount)) + ' ج.م</td>' +
+        '<td class="' + checkStatusClass(c.status) + '">' + checkStatusLabel(c.status) + '</td>' +
+        '<td class="cell-actions">' +
+        (pend
+          ? '<button class="btn small green" type="button" data-act="collect">💰 تحصيل</button> <button class="btn small red" type="button" data-act="return">⛔ ارتجاع</button>'
+          : '<button class="btn small dark" type="button" data-act="del">🗑️ حذف</button>') +
+        '</td>';
+      tr.dataset.cid = c.id;
+      tb.appendChild(tr);
+    });
+    const pend = checks.filter((c) => c && (c.status || "pending") === "pending");
+    const tot = round2(pend.reduce((m, c) => m + (Number(c.amount) || 0), 0));
+    const sum = $("#chkSummary");
+    if (sum) sum.textContent = "تحت التحصيل: " + pend.length + " شيك — الإجمالي " + fmt(tot) + " ج.م";
+  }
+  function openCheckCollectDialog(c) {
+    checkCollectId = c.id;
+    fillTreasurySelect("#chkCollectTreasury");
+    const d = $("#chkCollectDate");
+    if (d) d.value = todayISO();
+    const info = $("#chkCollectInfo");
+    if (info) info.textContent = "شيك «" + (c.customerName || "-") + "» — " + fmt(round2(c.amount)) +
+      " ج.م" + (c.checkNo ? " (#" + c.checkNo + ")" : "") + (c.dueDate ? " — استحقاق " + c.dueDate : "");
+    showModal("mCheckCollect");
+  }
+  function saveCheckCollect() {
+    const r = collectCheck(checkCollectId, $("#chkCollectTreasury").value, $("#chkCollectDate").value || todayISO());
+    if (!r.ok) { toast(r.msg, "warning"); return; }
+    hideModal("mCheckCollect");
+    renderChecks();
+    renderDashboard();
+    toast("تم تحصيل الشيك ودخل الخزينة ✅", "success");
+  }
+  function deleteCheckRec(id) {
+    const c = checks.find((x) => Number(x.id) === Number(id));
+    if (!c) return;
+    if ((c.status || "pending") === "pending") { toast("الشيك لسه تحت التحصيل — اعمل «ارتجاع» أو «تحصيل» بدل الحذف.", "warning"); return; }
+    if (!confirm("حذف الشيك رقم " + (c.checkNo || c.id) + " (" + (c.customerName || "") + ") من القائمة نهائيًا؟\n(القيد المرتبط بيتشال برضه)")) return;
+    const k = checkJrnKey(c.id);
+    if (k) {
+      const j = journalEntries.find((x) => x && String(x.refId || "") === k);
+      if (j) {
+        settleJrnLines(j.lines, -1);
+        journalEntries = journalEntries.filter((x) => x !== j);
+        persistJournal(); saveAccounts();
+        try { renderJournal(); } catch (e) { }
+      }
+    }
+    checks = checks.filter((x) => Number(x.id) !== Number(id));
+    saveChecks();
+    renderChecks();
+    toast("اتحذف الشيك.", "success");
+  }
+  function checksBindOnce() {
+    if (checksBound) return;
+    checksBound = true;
+    const on = (id, ev, fn) => { const el = $(id); if (el) el.addEventListener(ev, fn); };
+    on("#txtChkSearch", "input", () => { checksFilter.q = $("#txtChkSearch").value; renderChecks(); });
+    on("#chkStatusFilter", "change", () => { checksFilter.status = $("#chkStatusFilter").value; renderChecks(); });
+    on("#chkSort", "change", () => { checksFilter.sort = $("#chkSort").value; renderChecks(); });
+    on("#btnChkRefresh", "click", renderChecks);
+    on("#btnChkCollectCancel", "click", () => hideModal("mCheckCollect"));
+    on("#btnChkCollectSave", "click", saveCheckCollect);
+    const tb = $("#dgvChecks tbody");
+    if (tb) tb.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-act]");
+      if (!btn) return;
+      const id = parseInt(btn.closest("tr").dataset.cid, 10);
+      const c = checks.find((x) => Number(x.id) === id);
+      if (!c) return;
+      if (btn.dataset.act === "collect") openCheckCollectDialog(c);
+      else if (btn.dataset.act === "return") {
+        if (confirm("تأكيد ارتجاع شيك «" + (c.customerName || "-") + "» بمبلغ " + fmt(round2(c.amount)) +
+          " ج.م؟\nالمديونية هترجع على حساب العميل تاني.")) { returnCheck(id); renderChecks(); renderDashboard(); }
+      } else if (btn.dataset.act === "del") deleteCheckRec(id);
+    });
+  }
+
+  /* ================== 🧾 بناء 190 — منظومة الشيكات (أوراق القبض) ==================
+     الشيك الوارد يخصم مديونية العميل **فورًا** (نصيبه من «المدفوع» في الفاتورة يروح على
+     حساب 1.1.7 «شيكات لدى العملاء» بدل الخزينة) ويقف بتاريخ الاستحقاق لحد:
+       • التحصيل ⇒ سند قبض (مدين خزينة / دائن 1.1.7) — `collectCheck`
+       • الارتجاع ⇒ قيد (مدين 1.1.5 / دائن 1.1.7) ⇒ المديونية ترجع — `returnCheck`
+     مفتاح قيد الشيك: «CH:» + id (حماية من التكرار). */
+  const CHECKS_ACC_CODE = "1.1.7";
+  function checksAcc() {
+    const a = accByCode(CHECKS_ACC_CODE, "شيكات");
+    if (a) return a;
+    // 🧾 دليل بلا نقاط (الشركات السبع): ننشئ الكود المجرّد 117 تحت «الأصول المتداولة» —
+    // من غير ما نحقن كودًا منقّطًا يخلط الدليل ويكسر تجميع الفروع (acsIsDotFreeChart).
+    if (acsIsDotFreeChart()) {
+      const parent = accByCode("1.1", "الأصول المتداولة");
+      const ch = { id: nextAccountId(), code: "117", nameAr: "شيكات لدى العملاء", type: "asset", parentId: parent ? parent.id : 0, openingBalance: 0, isActive: true };
+      accounts.push(ch);
+      try { saveAccounts(); } catch (e) { }
+      return ch;
+    }
+    return ensureJrnAccount(CHECKS_ACC_CODE) || accByCode(CHECKS_ACC_CODE, "شيكات");
+  }
+  function nextCheckId() { return checks.reduce((m, c) => Math.max(m, Number(c && c.id) || 0), 0) + 1; }
+  function checkJrnKey(id) { const n = Number(id); return n > 0 ? "CH:" + n : ""; }
+  function checksPendingOf(partyId, partyKind) {
+    const kind = partyKind || "customer";
+    return checks.filter((c) => c && c.status === "pending" && (c.partyKind || "customer") === kind &&
+      String(c.customerId) === String(partyId) && (c.direction || "in") !== "out");
+  }
+  function checksPendingTotalOf(partyId, partyKind) {
+    return round2(checksPendingOf(partyId, partyKind).reduce((m, c) => m + (Number(c.amount) || 0), 0));
+  }
+  function addCheck(rec) {
+    const c = Object.assign({
+      id: nextCheckId(), direction: "in", partyKind: "customer",
+      status: "pending", createdAt: new Date().toISOString()
+    }, rec || {});
+    c.amount = round2(c.amount);
+    if (!c.dueDate) c.dueDate = String(c.createdAt).slice(0, 10);
+    checks.push(c);
+    saveChecks();
+    return c;
+  }
+  // ترتيب الشيكات: الأقرب استحقاقًا أولًا ثم الأبعد (طلب المالك) — الوضع الافتراضي في التبويب
+  function checkDueSort(list) {
+    return (list || []).slice().sort((a, b) => {
+      const da = String(a.dueDate || "9999-12-31"), db = String(b.dueDate || "9999-12-31");
+      return da < db ? -1 : da > db ? 1 : (Number(a.id) || 0) - (Number(b.id) || 0);
+    });
+  }
+  function postCheckReturnJrn(c) {
+    if (!c) return null;
+    const k = checkJrnKey(c.id);
+    if (k && journalEntries.find((j) => j && String(j.refId || "") === k)) return null;
+    ensureJrnStd();
+    const debt = accByCode("1.1.5", "مديونيات العملاء");
+    const chk = checksAcc();
+    const amount = round2(c.amount);
+    if (!debt || !chk || !(amount > 0)) return null;
+    const j = { id: nextJournalId(), number: jrnNo(), date: todayISO(),
+      desc: "ارتجاع شيك — " + (c.customerName || "-") + (c.checkNo ? " (#" + c.checkNo + ")" : "") + " — " + fmt(amount) + " ج.م",
+      ref: "ارتجاع شيك", refType: "ارتجاع شيك", refId: k,
+      debit: amount, credit: amount,
+      lines: [{ accountId: Number(debt.id), debit: amount, credit: 0 }, { accountId: Number(chk.id), debit: 0, credit: amount }] };
+    settleJrnLines(j.lines, 1);
+    journalEntries.push(j);
+    persistJournal(); saveAccounts();
+    try { renderJournal(); } catch (e) { }
+    return j;
+  }
+  function collectCheck(id, treasuryId, dateISO) {
+    const c = checks.find((x) => Number(x.id) === Number(id));
+    if (!c) return { ok: false, msg: "الشيك مش موجود" };
+    if (c.status !== "pending") return { ok: false, msg: "الشيك ده اتحصّل أو اترجع قبل كده" };
+    const t = treasury.find((x) => Number(x.id) === Number(treasuryId));
+    if (!t) return { ok: false, msg: "اختار الخزينة اللي الشيك يدخلها" };
+    const amount = round2(c.amount);
+    if (!(amount > 0)) return { ok: false, msg: "مبلغ الشيك مش صالح" };
+    const when = dateISO || todayISO();
+    const v = { id: nextVoucherId(), type: "in", date: when, amount: amount,
+      treasuryId: t.id, desc: "تحصيل شيك — " + (c.customerName || "-") + (c.checkNo ? " (#" + c.checkNo + ")" : ""),
+      refType: "تحصيل شيك", refId: "CHC:" + c.id };
+    vouchers.push(v);
+    t.balance = round2((Number(t.balance) || 0) + amount);
+    syncTreasuryItemToSett(t);
+    try { postVoucherJournal(v, t, checksAcc()); } catch (e) { }
+    c.status = "collected"; c.treasuryId = t.id; c.collectedAt = when;
+    saveVouchers(); saveTreasury(); saveChecks();
+    addActivity("تحصيل شيك", "تحصيل شيك " + (c.customerName || "") + " بمبلغ " + fmt(amount) + " ج.م في «" + t.name + "»");
+    return { ok: true, voucher: v };
+  }
+  function returnCheck(id, notes) {
+    const c = checks.find((x) => Number(x.id) === Number(id));
+    if (!c) return { ok: false, msg: "الشيك مش موجود" };
+    if (c.status !== "pending") return { ok: false, msg: "الشيك ده اتحصّل أو اترجع قبل كده" };
+    try { postCheckReturnJrn(c); } catch (e) { }
+    // 🧾 بناء 190: الشيك المرتجع ترجع المديونية على حساب العميل (نفس قيمة الشيك)
+    if ((c.partyKind || "customer") === "customer" && c.customerId) {
+      const cust = customers.find((x) => Number(x.id) === Number(c.customerId));
+      if (cust) { cust.currentBalance = round2((Number(cust.currentBalance) || 0) + round2(c.amount)); saveCustomers(); }
+    }
+    c.status = "returned"; c.returnedAt = todayISO();
+    if (notes) c.notes = (c.notes ? c.notes + " | " : "") + notes;
+    saveChecks();
+    addActivity("ارتجاع شيك", "ارتجاع شيك " + (c.customerName || "") + " بمبلغ " + fmt(round2(c.amount)) + " ج.م — رجعت المديونية");
+    return { ok: true };
+  }
   function treasuryAmounts() {
     const map = {};
     treasury.forEach((t) => (map[t.id] = { in: 0, out: 0 }));
@@ -9359,6 +10258,12 @@ id: nextVoucherId(),
   }
 
   function openTreasuryDialog(t) {
+    // 🧾 بناء 190: «إنستا باي» خزينة نظام (رصيدها في الشاشة الرئيسية) — ممنوع تعديلها أو
+    // تغيير نوعها (طلب المالك: يضيف حساب بنك عادي لكن ما يعدّلش إنستا).
+    if (t && t.system) {
+      toast("«إنستا باي» حساب نظامي محمي — رصيده بيتعرض لوحده في الشاشة الرئيسية ومينفعش يتعدّل. ضيف حساب بنكي عادي لو محتاج.", "warning");
+      return;
+    }
     treasuryEditingId = t ? t.id : null;
     $("#treasuryModalTitle").textContent = t ? "✏️ تعديل الخزينة" : "➕ إضافة خزينة / حساب";
     $("#tName").value = t ? t.name : "";
@@ -11553,10 +12458,11 @@ id: nextVoucherId(),
   // الاحتياطي كان ميت ⇒ الدالة بترجع null ⇒ invoiceJrnPlan يرد {error:"cash"} ⇒ **الترحيل بيتلغى**.
   // الإصلاح: الكود بالحرف ⇒ نسخة الكود بلا نقاط ⇒ بالاسم (بلا شرط parentId)، وإلا لا يوجد حساب مطابق.
   function accForTreasuryAcc(t) {
-    const byCode = { cash: "1.1.1", bank: "1.1.2", wallet: "1.1.3" };
-    const byName = { cash: "صناديق", bank: "البنوك", wallet: "المحافظ" };
-    const key = t && byCode[t.type] ? t.type : "";
-    if (!key) return null;
+    // 🧾 بناء 190: «إنستا باي» بترحّل على حساب البنوك (1.1.2) — رصيدها المنفصل في اللوحة
+    // محسوب من نوع الخزينة نفسه، فالمركز المالي/الدليل يفضلوا بسيطين.
+    const byCode = { cash: "1.1.1", bank: "1.1.2", instapay: "1.1.2", wallet: "1.1.3" };
+    const byName = { cash: "صناديق", bank: "البنوك", instapay: "البنوك", wallet: "المحافظ" };
+    const key = t && byCode[t.type] ? t.type : "cash";
     let a = accounts.find((x) => String(x.code) === byCode[key] && x.isActive);
     if (a) return a;
     const bare = byCode[key].replace(/\./g, "");
@@ -11564,14 +12470,16 @@ id: nextVoucherId(),
     if (a) return a;
     a = accounts.find((x) => x.type === "asset" && x.isActive && (x.nameAr || "").includes(byName[key]));
     if (a) return a;
-    return null;
+    a = accounts.find((x) => String(x.code) === "1.1.1" && x.isActive);
+    if (a) return a;
+    return accounts.find((x) => x && x.isActive && String(x.code || "") === "111") || null;
   }
 
   // قائمة خزائن بملصق الرصيد، والنقدية أولًا (المفضل) ثم البنوك فالمحافظ
   function fillTreasurySelect(selId, labelMainCash) {
     const el = $(selId);
     el.innerHTML = "";
-    const ORD = { cash: 0, bank: 1, wallet: 2 };
+    const ORD = { cash: 0, bank: 1, instapay: 2, wallet: 3 };
     const rank = (t) => (ORD[t.type] !== undefined ? ORD[t.type] : 3);
     const list = treasury.slice().sort((a, b) => rank(a) - rank(b) || String(a.name || "").localeCompare(String(b.name || ""), "ar"));
     const mainCash = labelMainCash
@@ -11580,7 +12488,7 @@ id: nextVoucherId(),
     list.forEach((t) => {
       const opt = document.createElement("option");
       opt.value = t.id;
-      const typeLbl = t.type === "bank" ? "بنك" : t.type === "wallet" ? "محفظة" : "نقدية";
+      const typeLbl = t.type === "bank" ? "بنك" : t.type === "instapay" ? "إنستا باي" : t.type === "wallet" ? "محفظة" : "نقدية";
       opt.textContent = mainCash && Number(t.id) === Number(mainCash.id)
         ? "الخزينة — " + t.name + " — رصيد " + fmt(t.balance || 0) + " ج.م"
         : t.name + " (" + typeLbl + ") — رصيد " + fmt(t.balance || 0) + " ج.م";
@@ -11596,7 +12504,7 @@ id: nextVoucherId(),
   function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 
   function treasuryTypeLabel(t) {
-    return (t && t.type) === "bank" ? "بنك" : (t && t.type) === "wallet" ? "محفظة" : "نقدية";
+    return (t && t.type) === "bank" ? "بنك" : (t && t.type) === "instapay" ? "إنستا باي" : (t && t.type) === "wallet" ? "محفظة" : "نقدية";
   }
 
   // الحسابات التانية اللي فيها فلوس (بالترتيب النزولي) + إجمالي أرصدة كل الحسابات
@@ -11964,6 +12872,10 @@ id: nextVoucherId(),
     if (!from || !to) { toast("اختار الحساب المنقول منه والحساب المنقول إليه.", "warning"); return; }
     if (Number(from.id) === Number(to.id)) { toast("لا يمكن التحويل من الحساب إلى نفس الحساب.", "warning"); return; }
     if (!(amount > 0)) { toast("اكتب مبلغًا صحيحًا أكبر من الصفر.", "warning"); return; }
+    // 🔒 بناء 187 (استُرجع في 197): حارس «لا ترحيل بلا حساب» — اتشال بالغلط في شغل جوبايلوت (كوميت 52f428c)
+    // وخلي التحويل يرفض برسالة «أضف الحساب» بدل ما يعمل الحسابات القياسية الناقصة أوتوماتيك.
+    // الحارس ده بيعيد تنشيط 1.1.1/1.1.2/1.1.3 قبل أي فحص، فالخزائن القياسية دايماً تلاقي حسابها.
+    ensureJrnStd();
     // افحص الحسابين قبل أي كتابة؛ التحويل لا ينشئ حسابات بديلة أو يرحّل على حساب آخر.
     const aFrom = accForTreasuryAcc(from);
     const aTo = accForTreasuryAcc(to);
@@ -12175,6 +13087,14 @@ id: nextVoucherId(),
     return true;
   }
 
+  // 🧾 بناء 190: أطراف «المدفوع» — تدعم تعدّد طرق السداد + الشيكات (متوافق خلفيًا بالحرف)
+  function invPaidAccount(kind, inv, tr, p) {
+    if (p && p.method === "check" && kind === "sale") return checksAcc();
+    if (inv.vanRepAccountId) return accounts.find((a) => Number(a.id) === Number(inv.vanRepAccountId)) || null;
+    const t = (p && p.treasuryId != null) ? treasury.find((x) => Number(x.id) === Number(p.treasuryId)) : null;
+    return accForTreasuryAcc(t || tr);
+  }
+
   // أطراف القيد: بيع = مدين (حساب الدفع أو مديونيات العملاء) / دائن (إيراد + ضريبة)
   //               شراء = مدين (مخزون + ضريبة) / دائن (حساب الدفع أو مستحقات الموردين)
   function invoiceJrnPlan(kind, inv, tr) {
@@ -12187,6 +13107,9 @@ id: nextVoucherId(),
     const ajal = String(inv.paymentMethod || "") === "آجل";
     // 🆕 (طلب المالك) السداد الجزئي: أى «مدفوع» نقدًا الآن، والباقي (الآجل) على حساب الطرف
     let paid = (inv.paidAmount != null) ? round2(inv.paidAmount) : (ajal ? 0 : total);
+    // 🧾 بناء 190: لو الفاتورة فيها سطور سداد مفصّلة (نقدي/محافظ/إنستا باي/شيك) ⇒ المدفوع = مجموعها
+    const payLines = (Array.isArray(inv.payments) ? inv.payments : []).filter((p) => p && Number(p.amount) > 0);
+    if (payLines.length) paid = round2(payLines.reduce((m, p) => m + (Number(p.amount) || 0), 0));
     if (!(paid >= 0)) paid = 0;
     if (paid > total) paid = total;
     const due = round2(total - paid);
@@ -12202,11 +13125,20 @@ id: nextVoucherId(),
       if (paid > 0) {
         // 🚚 بناء 178: بيع مندوب السيارة — الفلوس مش بتدخل خزينة، بتقف على حساب «ذمم مناديب
         // البيع» (نصيب المندوب) لحدّ التصفية. باقي المبيعات زي ما هي (خزينة/بنك/محفظة).
-        const cash = inv.vanRepAccountId
-          ? accounts.find((a) => Number(a.id) === Number(inv.vanRepAccountId))
-          : accForTreasuryAcc(tr);
-        if (!cash) return { error: "cash" };
-        lines.push({ accountId: Number(cash.id), debit: paid, credit: 0 });
+        // 🧾 بناء 190: ومع سطور سداد مفصّلة، كل سطر يروح لحسابه (و«شيك» على 1.1.7).
+        if (payLines.length) {
+          for (const p of payLines) {
+            const acc = invPaidAccount(kind, inv, tr, p);
+            if (!acc) return { error: "cash" };
+            lines.push({ accountId: Number(acc.id), debit: round2(p.amount), credit: 0 });
+          }
+        } else {
+          const cash = inv.vanRepAccountId
+            ? accounts.find((a) => Number(a.id) === Number(inv.vanRepAccountId))
+            : accForTreasuryAcc(tr);
+          if (!cash) return { error: "cash" };
+          lines.push({ accountId: Number(cash.id), debit: paid, credit: 0 });
+        }
       }
       lines.push({ accountId: Number(rev.id), debit: 0, credit: net });
       if (tax > 0) {
@@ -12229,9 +13161,18 @@ id: nextVoucherId(),
         lines.push({ accountId: Number(debt.id), debit: 0, credit: due });
       }
       if (paid > 0) {
-        const cash = accForTreasuryAcc(tr);
-        if (!cash) return { error: "cash" };
-        lines.push({ accountId: Number(cash.id), debit: 0, credit: paid });
+        // 🧾 بناء 190: سطور سداد مفصّلة للمشتريات كذلك (بلا «شيك» — الشيكات للعملاء فقط)
+        if (payLines.length) {
+          for (const p of payLines) {
+            const acc = invPaidAccount(kind, inv, tr, p);
+            if (!acc) return { error: "cash" };
+            lines.push({ accountId: Number(acc.id), debit: 0, credit: round2(p.amount) });
+          }
+        } else {
+          const cash = accForTreasuryAcc(tr);
+          if (!cash) return { error: "cash" };
+          lines.push({ accountId: Number(cash.id), debit: 0, credit: paid });
+        }
       }
     }
     const d = round2(lines.reduce((m, l) => m + (Number(l.debit) || 0), 0));
@@ -16137,7 +17078,10 @@ id: nextVoucherId(),
     "db/supabase-upgrade-60-profile-self-features-guard.sql",
     // ترقية ٦١ (استيراد Excel لمالك البرنامج) اتنفّذت على Supabase بأمر المالك
     // «انشر و ارفع ترقيه»؛ نسخة النشر تحملها كسجل، وإعادة تشغيلها غير مطلوبة.
-    "db/supabase-upgrade-61-excel-import.sql"];
+    "db/supabase-upgrade-61-excel-import.sql",
+    // 🧾 ترقية ٦٢ (الشيكات + إنستا باي + حساب 1.1.7) — في الحزمة كسجل، والتنفيذ على
+    // السحابة بأمر المالك الصريح (لحد ما يتنفّذ المزامنة محمية بـprobeChecksTable).
+    "db/supabase-upgrade-62-checks.sql"];
   // ملفات موجودة في db/ بس مش داخلة في نسخة النشر — كل واحد بسبب مكتوب.
   // ترقية ٥٨ ما زالت مستقلة ومحجوزة لإزالة password_plain، وملفات rollback لا تدخل الحزمة.
   // بناء 141: ترقية ٥ـ (قفل التسجيل + دوال الرموز) **اتنفّذت** 5/10 ≈01:29 ⇒ دخلت FILES فوق
@@ -16964,6 +17908,8 @@ id: nextVoucherId(),
     $("#btnStockTake").addEventListener("click", openStockTake);
     $("#btnTransferStock").addEventListener("click", openTransferModal);
     $("#btnRefreshProducts").addEventListener("click", renderProducts);
+    /* 🆕 بناء 197: زرار تنزيل دليل الأصناف ملف Excel حقيقي (.xlsx) — بياخد نفس اللي ظاهر على الشاشة بالضبط */
+    $("#btnExportProductsXlsx").addEventListener("click", () => exportProductsExcel());
     $("#txtProductSearch").addEventListener("input", renderProducts);
     $("#cmbProductCategory").addEventListener("change", renderProducts);
 
@@ -17505,7 +18451,12 @@ id: nextVoucherId(),
       if (t) openTreasuryDialog(t);
     });
     $("#tType").addEventListener("change", () => {
-      const type = $("#tType").value;
+    const type = $("#tType").value;
+    // 🧾 بناء 190: حارس النظام — إنستا باي ما يتعدّلش
+    if (treasuryEditingId) {
+      const cur = treasury.find((x) => x.id === treasuryEditingId);
+      if (cur && cur.system) { toast("«إنستا باي» حساب نظامي محمي ومينفعش يتعدّل.", "warning"); hideModal("mTreasury"); return; }
+    }
       $("#tAccountNo").placeholder = type === "bank" ? "رقم الحساب البنكي..." : type === "wallet" ? "رقم المحفظة..." : "غير مطلوب للصندوق";
     });
 
@@ -18518,6 +19469,10 @@ const pwEye = document.getElementById("btnShowPass");
     step("cashier_shifts", S.cashier_shifts, shifts, function (v) { shifts = v; });
     // 🚚 بناء 178: رحلات سيارات المناديب
     step("car_trips", S.car_trips, carTrips, function (v) { carTrips = v; });
+    // 🧾 بناء 190: الشيكات — دمج بنفس الهوية (local_id)
+    step("checks", S.checks, checks, function (v) { checks = v; });
+    // 🧾 بناء 190: تأمين «إنستا باي»/«المحفظة» الافتراضيتين بعد اعتماد السحابة
+    ensureDefaultTreasuries();
     step("journal_entries", S.journalEntries, journalEntries, function (v) { journalEntries = v; });
     // 🧱 بناء 186: بعد دمج السندات/القيود من السحابة، نحدّث «أرضية» الأرقام
     if (typeof idFloorsLoad === "function") idFloorsLoad();
@@ -19498,11 +20453,12 @@ const pwEye = document.getElementById("btnShowPass");
     ["fixedAssets", "🏭 الأصول الثابتة"],
     ["cashierShifts", "🧾 ورديات الكاشير"],
     ["carTab", "🚚 تبويب سيارات مناديب البيع"],
-    ["vanSales", "🚚 سيارات مندوبين المبيعات"]
+    ["vanSales", "🚚 سيارات مندوبين المبيعات"],
+    ["checks", "🧾 الشيكات (أوراق القبض)"]
     ];
 
   // صلاحيات opt-in: owner/سوبر أدمن عندهما دائمًا، والعضو ما عندهاش إلا لو فُعّلت صريحًا
-  const OPT_IN_FEATS = ["clientSettings", "docManager", "returnsManager", "fixedAssets", "cashierShifts", "vanSales"];
+  const OPT_IN_FEATS = ["clientSettings", "docManager", "returnsManager", "fixedAssets", "cashierShifts", "vanSales", "checks"];
 
   /* 🆕 بناء 131 — كاش مزايا الشركات (قراءة واحدة من `organizations.features`).
    * قبل البناء ده كانت نافذة «⚙️ المزايا» بتفتح وكل الصناديق معلّمة (ما بتقرأش
