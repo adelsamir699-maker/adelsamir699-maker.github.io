@@ -2284,8 +2284,30 @@
   window.addEventListener("beforeprint", function () { enterPaperTitle(null); });
   window.addEventListener("afterprint", exitPaperTitle);
 
+  /* 🆕 بناء 230: قفل واحد للطباعة — ضغطة الحفظ المتكررة ما تفتحش نافذتين طباعة ورا بعض.
+     `uiClickOnce` بيبلع الضغطة التانية لحد ما الأولى تخلص + مهلة قصيرة، ومش بيأثر على
+     أي استدعاء مباشر من الاختبارات (القفل على مستوى زرار الواجهة بس). */
+  let printUiBusy = false;
+  let printUiCooldownUntil = 0;
+
+  function uiClickOnce(fn, ms) {
+    let busy = false;
+    return function (ev) {
+      if (busy) return undefined;
+      busy = true;
+      let ret;
+      try { ret = fn(ev); }
+      catch (e) { busy = false; throw e; }
+      const done = () => setTimeout(() => { busy = false; }, ms || 1000);
+      if (ret && typeof ret.then === "function") ret.then(done, done);
+      else done();
+      return ret;
+    };
+  }
+
   function printSection(el) {
     if (!el) return;
+    if (printUiBusy || Date.now() < printUiCooldownUntil) return;
     // اسم الشركة من الضبط (لكل شركة على حدة) يظهر في كل صفحات الطباعة
     // ملاحظة: صفحتا الفاتورة (بيع/شراء) تملآن ترويستهما بنفسها احترامًا لصناديق «على الفاتورة».
     const org = invOrgName();
@@ -2315,16 +2337,29 @@
     document.body.classList.add("printing");
     enterPaperTitle(el.id); // عنوان نظيف طول فترة الطباعة، ويرجع عنوان الشاشة أول ما تخلص
 
+    let cleaned = false;
     const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
       exitPaperTitle();
       el.classList.remove("print-target");
       el.classList.remove("paper-a4", "paper-a5", "paper-thermal");
       document.body.classList.remove("printing");
       window.removeEventListener("afterprint", cleanup);
+      printUiBusy = false;
+      printUiCooldownUntil = Date.now() + 800;
     };
+    printUiBusy = true;
     window.addEventListener("afterprint", cleanup);
-    window.print();
-    setTimeout(cleanup, 1200);
+    try {
+      const ae = document.activeElement;
+      if (ae && typeof ae.blur === "function") ae.blur();
+      window.print();
+    } catch (e) {
+      cleanup();
+      return;
+    }
+    setTimeout(cleanup, 900);
   }
 
   /* ================== الروترة بين الشاشات ================== */
@@ -2821,7 +2856,26 @@
     applySectionVisibility();
   }
 
-  function showView(name) {
+  let viewBackStack = [];
+  function viewBackUpdate() {
+    const has = viewBackStack.length > 0;
+    ["#btnChkBack", "#btnAcsBack"].forEach((id) => {
+      const el = $(id);
+      if (el) el.hidden = !has;
+    });
+  }
+  function viewBackGo(fallback) {
+    const prev = viewBackStack.pop() || null;
+    viewBackUpdate();
+    showView(prev && prev.name ? prev.name : (fallback || "dashboard"), { history: false });
+  }
+  function showView(name, opts) {
+    opts = opts || {};
+    const prevView = ownerCurrentView;
+    if (opts.history !== false && prevView && prevView !== name) {
+      viewBackStack.push({ name: prevView, at: Date.now() });
+      if (viewBackStack.length > 40) viewBackStack.shift();
+    }
     // 📷 بناء 144: البائع يسيب الفاتورة ويروح شاشة تانية ⇒ الكاميرا تقفل والمسدس ياخد
     // عادي. القفل هنا مش في الزرار بس — أي خروج من الشاشة (شريط/قائمة/برمجي) بيقفلها.
     if (scanCam.on) scanCamClose();
@@ -2948,6 +3002,7 @@
     // ده كان ما ينفّذش حاجة. الدالتين في نفس النطاق، فنناديهم على طول.
     if (name === "admin") { startPresenceView(); refreshPresenceCard(); }
     if (name !== "admin") stopPresenceView();
+    viewBackUpdate();
   }
 
   /* ================== لوحة التحكم ================== */
@@ -3522,6 +3577,66 @@
   }
 
   /* ================== كشف الحساب ================== */
+  /* 🧾 بناء 229 (طلب المالك 22/10): «الفاتورة بالكامل تظهر مدين، والمسدد يظهر دائن».
+     الرصيد الصافي لا يتغيّر: (إجمالي الفاتورة − المسدد) = نفس المبلغ الآجل القديم.
+     الفاتورة القديمة اللي كان لها سطر «فاتورة مبيعات آجلة» في txs بيتشال من العرض
+     ويتحل محلّه سطران (الإجمالي + المسدد) — ممنوع يظهروا مع بعض فيتضاعف الرصيد. */
+  function partyInvoicePaidOf(inv, total) {
+    const tot = round2(Number(total) || 0);
+    let paid = 0;
+    if (inv && inv.paidAmount != null && String(inv.paidAmount) !== "") {
+      paid = round2(Number(inv.paidAmount) || 0);
+    } else if (inv && inv.dueAmount != null && String(inv.dueAmount) !== "") {
+      paid = round2(tot - (Number(inv.dueAmount) || 0));
+    } else if (inv && Array.isArray(inv.payments) && inv.payments.length) {
+      paid = round2(inv.payments.reduce((m, p) => {
+        const isAjal = String((p && p.method) || "") === "ajal";
+        return m + (isAjal ? 0 : (Number(p && p.amount) || 0));
+      }, 0));
+    } else {
+      paid = (String((inv && inv.paymentMethod) || "") === "آجل") ? 0 : tot;
+    }
+    if (inv && Array.isArray(inv.payments) && inv.payments.length) {
+      const byPay = round2(inv.payments.reduce((m, p) => {
+        const isAjal = String((p && p.method) || "") === "ajal";
+        return m + (isAjal ? 0 : (Number(p && p.amount) || 0));
+      }, 0));
+      if (byPay > paid) paid = byPay;
+    }
+    if (!(paid > 0) && tot > 0 && inv && inv.dueAmount != null && String(inv.dueAmount).trim() !== "" &&
+      Math.abs(Number(inv.dueAmount) || 0) < 0.005) paid = tot;
+    if (!(paid > 0)) paid = 0;
+    if (paid > tot) paid = tot;
+    return round2(paid);
+  }
+  function partyInvoiceDisplayRows(inv, kind, partyName) {
+    const total = round2(Number(inv.grandTotal) || 0);
+    if (!(total > 0)) return [];
+    const paid = partyInvoicePaidOf(inv, total);
+    const no = inv.invoiceNumber || inv.invoiceNo || inv.id;
+    const date = inv.invoiceDate || inv.date;
+    const isSale = kind === "sale";
+    const out = [{
+      date: date,
+      desc: (isSale ? "🧾 فاتورة مبيعات رقم " : "🧾 فاتورة مشتريات رقم ") + no +
+        " — الإجمالي" + (partyName ? " (" + partyName + ")" : ""),
+      debit: isSale ? total : 0,
+      credit: isSale ? 0 : total,
+      id: null,
+      invoiceRow: true
+    }];
+    if (paid > 0) {
+      out.push({
+        date: date,
+        desc: (isSale ? "💵 المسدد من فاتورة مبيعات رقم " : "💸 المسدد لفاتورة مشتريات رقم ") + no,
+        debit: isSale ? 0 : paid,
+        credit: isSale ? paid : 0,
+        id: null,
+        invoiceRow: true
+      });
+    }
+    return out;
+  }
   function getStatement(cust) {
     // 🔁 بناء 108/172: مرتجعات الرد النقدي (أو الجزء الكاش من المرتجع المختلط) — سطر توضيحي ما يغيّرش الرصيد
     const memoRows = saleReturns
@@ -3535,27 +3650,17 @@
           debit: 0, credit: 0
         };
       });
-    /* 🧾 بناء 211 (طلب المالك 20/10): الفاتورة الكاش باسم عميل مسجّل تظهر في كشفه كسطر
-       «فاتورة مدفوعة» — مدين ودائن صفر ⇒ صفر أثر على الرصيد (سجل تعاملات كامل). */
-    const cashInvRows = sales
+    const invoiceRows = sales
       .filter((s) => Number(s.customerId) === Number(cust.id) && !s.isReturn)
-      .map((s) => {
-        const total = round2(Number(s.grandTotal) || 0);
-        const paid = (s.paidAmount != null) ? round2(Number(s.paidAmount) || 0)
-          : (String(s.paymentMethod || "") === "آجل" ? 0 : total);
-        const due = round2(Number(s.dueAmount != null ? s.dueAmount : (total - paid)) || 0);
-        if (!(paid > 0) || due > 0.0001) return null;
-        return {
-          date: s.invoiceDate || s.date,
-          desc: "💵 فاتورة مبيعات رقم " + (s.invoiceNumber || s.invoiceNo || s.id) + " — مدفوعة بالكامل " + fmt(paid) + " ج.م (بلا مديونية)",
-          debit: 0, credit: 0
-        };
-      })
-      .filter(Boolean);
+      .flatMap((s) => partyInvoiceDisplayRows(s, "sale", ""));
+    /* السطر القديم «فاتورة مبيعات آجلة» بيتشال — الإجمالي والمسدد بقوا سطرين بدالها. */
     const partyTxs = txs
+      .filter((t) => Number(t.customerId) === Number(cust.id))
+      .filter((t) => !STM_INVOICE_TX_RE.test(String(t.desc || "")));
+    const allPartyTxs = txs
       .filter((t) => Number(t.customerId) === Number(cust.id));
-    const hasOpeningTx = partyTxs.some(isPartyOpeningTx);
-    const rows = partyTxs.concat(memoRows, cashInvRows).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const hasOpeningTx = allPartyTxs.some(isPartyOpeningTx);
+    const rows = partyTxs.concat(memoRows, invoiceRows).sort((a, b) => new Date(a.date) - new Date(b.date));
     let run = hasOpeningTx ? 0 : (Number(cust.openingBalance) || 0);
     return rows.map((t) => {
       run = Math.round((run + t.debit - t.credit) * 100) / 100;
@@ -3569,7 +3674,8 @@
         id: t.id == null ? null : t.id,
         paymentMethod: t.paymentMethod || "",
         treasuryId: t.treasuryId == null ? null : t.treasuryId,
-        treasuryName: t.treasuryName || ""   // 🆕 بناء 199 (بند #15ب): مصدر السداد المسجّل على الحركة
+        treasuryName: t.treasuryName || "",  // 🆕 بناء 199 (بند #15ب): مصدر السداد المسجّل على الحركة
+        invoiceRow: !!t.invoiceRow
       };
     });
   }
@@ -3689,11 +3795,13 @@
   const STM_RETURN_BAL_RE = /خصم من الرصيد/;
   function stmRowLockReason(r) {
     if (!r) return "السطر مش موجود — حدّث الصفحة.";
-    if (r.id == null) return "سطر توضيحي لمرتجع — بيتشال من شاشة المرتجعات.";
     if (stmIsCarryRow(r)) return "ده رصيد مرحّل من فترة قبل كده — مش حركة حقيقية تتحذف.";
     const d = String(r.desc || "");
+    if (r.invoiceRow || STM_INVOICE_TX_RE.test(d) || /فاتورة\s+(مبيعات|مشتريات)\s+رقم/.test(d)) {
+      return "دي حركة جاية من فاتورة — تتحذف من زر 🗑️ في الفاتورة نفسها علشان المخزون والقيود تتراجع صح.";
+    }
+    if (r.id == null) return "سطر توضيحي — بيتشال من شاشة المستند الأصلي.";
     if (STM_OPENING_TX_RE.test(d)) return "الرصيد الافتتاحي بيتعدّل من بطاقة العميل/المورد نفسه، مش بيتم حذفه من الكشف.";
-    if (STM_INVOICE_TX_RE.test(d)) return "دي حركة جاية من فاتورة — تتحذف من زر 🗑️ في الفاتورة نفسها علشان المخزون والقيود تتراجع صح.";
     if (STM_RETURN_BAL_RE.test(d)) return "دي قيمة مرتجع اتخصمت من الرصيد — المرتجع نفسه بيتحذف من شاشة المرتجعات والمرجوع بيرجع معه.";
     if ((Number(r.debit) || 0) > 0) return "ده أثر مستند على العميل/المورد — بيتراجع من شاشة المستند نفسه.";
     if (!((Number(r.credit) || 0) > 0)) return "السطر بلا حركة نقدية — مش قابل للحذف من الكشف.";
@@ -5607,6 +5715,12 @@
         });
       }
     });
+    try {
+      (products || []).forEach((p) => {
+        const n = String((p && p.unit) || "").trim();
+        if (n && list.indexOf(n) === -1) list.push(n);
+      });
+    } catch (e) { }
     return list;
   }
 
@@ -5619,6 +5733,12 @@
         const n = (u && (typeof u === "string" ? u : (u.name || u.symbol))) || u;
         if (n && list.indexOf(n) === -1) list.push(n);
       });
+      try {
+        (products || []).forEach((p) => {
+          const n = String((p && p.unit) || "").trim();
+          if (n && list.indexOf(n) === -1) list.push(n);
+        });
+      } catch (e) { }
       if (current && list.indexOf(current) === -1) list.push(current);
       fillSelect(sel, list, current != null && list.indexOf(current) !== -1 ? current : (list[0] || ""));
     };
@@ -9679,27 +9799,23 @@
         desc: "↩️ مرتجع مشتريات رقم " + retNo(r) + " — استلام نقدية بقيمة " + fmt(retCashOf(r)) + " ج.م",
         debit: 0, credit: 0
       }));
-    /* 🧾 بناء 211: نفس قاعدة العميل — فاتورة شراء مدفوعة بالكامل باسم مورد مسجّل تظهر كسطر
-       «مدفوعة» بصفر أثر على الرصيد. */
-    const cashInvRows = purchases
-      .filter((s) => Number(s.supplierId) === Number(sup.id) && !s.isReturn)
-      .map((s) => {
-        const total = round2(Number(s.grandTotal) || 0);
-        const paid = (s.paidAmount != null) ? round2(Number(s.paidAmount) || 0)
-          : (String(s.paymentMethod || "") === "آجل" ? 0 : total);
-        const due = round2(Number(s.dueAmount != null ? s.dueAmount : (total - paid)) || 0);
-        if (!(paid > 0) || due > 0.0001) return null;
-        return {
-          date: s.invoiceDate || s.date,
-          desc: "🧾 فاتورة مشتريات رقم " + (s.invoiceNumber || s.invoiceNo || s.id) + " — مدفوعة بالكامل " + fmt(paid) + " ج.م (بلا مستحق)",
-          debit: 0, credit: 0
-        };
+    /* 🧾 بناء 229: نفس قاعدة العميل — إجمالي فاتورة الشراء دائن، والمسدد منها مدين. */
+    const invoiceRows = purchases
+      .filter((s) => {
+        if (!s || s.isReturn) return false;
+        const pid = (s.supplierId != null) ? s.supplierId : s.supplier_id;
+        if (pid != null && String(pid).trim() !== "") return Number(pid) === Number(sup.id);
+        const nm = String(s.supplierName || s.supplier || "").trim();
+        return !!nm && normalizeAr(nm) === normalizeAr(String(sup.nameAr || "").trim());
       })
-      .filter(Boolean);
+      .flatMap((s) => partyInvoiceDisplayRows(s, "purchase", ""));
     const partyTxs = supplierTxs
+      .filter((t) => Number(t.supplierId) === Number(sup.id))
+      .filter((t) => !STM_INVOICE_TX_RE.test(String(t.desc || "")));
+    const allPartyTxs = supplierTxs
       .filter((t) => Number(t.supplierId) === Number(sup.id));
-    const hasOpeningTx = partyTxs.some(isPartyOpeningTx);
-    const rows = partyTxs.concat(memoRows, cashInvRows).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const hasOpeningTx = allPartyTxs.some(isPartyOpeningTx);
+    const rows = partyTxs.concat(memoRows, invoiceRows).sort((a, b) => new Date(a.date) - new Date(b.date));
     let run = hasOpeningTx ? 0 : (parseFloat(sup.openingBalance) || 0);
     return rows.map((t) => {
       run = Math.round((run + t.debit - t.credit) * 100) / 100;
@@ -9707,7 +9823,7 @@
       return { date: t.date, desc: t.desc, debit: t.debit, credit: t.credit, balance: run,
         id: t.id == null ? null : t.id, paymentMethod: t.paymentMethod || "",
         treasuryId: t.treasuryId == null ? null : t.treasuryId,
-        treasuryName: t.treasuryName || "" };   // 🆕 بناء 199 (بند #15ب)
+        treasuryName: t.treasuryName || "", invoiceRow: !!t.invoiceRow };   // 🆕 بناء 199 (بند #15ب)
     });
   }
 
@@ -11669,6 +11785,7 @@ id: nextVoucherId(),
     on("#chkStatusFilter", "change", () => { checksFilter.status = $("#chkStatusFilter").value; renderChecks(); });
     on("#chkSort", "change", () => { checksFilter.sort = $("#chkSort").value; renderChecks(); });
     on("#btnChkRefresh", "click", renderChecks);
+    on("#btnChkBack", "click", () => viewBackGo("customers"));
     on("#btnChkCollectCancel", "click", () => hideModal("mCheckCollect"));
     on("#btnChkCollectSave", "click", saveCheckCollect);
     on("#btnChkEditCancel", "click", () => hideModal("mCheckEdit"));
@@ -17569,6 +17686,8 @@ id: nextVoucherId(),
     $("#btnAcsRefresh").addEventListener("click", acsRenderList);
     $("#btnAcsClear").addEventListener("click", acsClearSearch);
     $("#btnAcsPrint").addEventListener("click", acsPrint);
+    const acsBack = $("#btnAcsBack");
+    if (acsBack) acsBack.addEventListener("click", () => viewBackGo("chartTree"));
   }
   function renderAccStatementView() {
     if (!acsGate()) return;
@@ -20324,7 +20443,7 @@ id: nextVoucherId(),
     $("#btnTransferStock").addEventListener("click", openTransferModal);
     $("#btnRefreshProducts").addEventListener("click", renderProducts);
     /* 🆕 بناء 197: زرار تنزيل دليل الأصناف ملف Excel حقيقي (.xlsx) — بياخد نفس اللي ظاهر على الشاشة بالضبط */
-    $("#btnExportProductsXlsx").addEventListener("click", () => exportProductsExcel());
+    $("#btnExportProductsXlsx").addEventListener("click", uiClickOnce(function () { return exportProductsExcel(); }, 1500));
     $("#txtProductSearch").addEventListener("input", renderProducts);
     $("#cmbProductCategory").addEventListener("change", renderProducts);
 
@@ -20542,7 +20661,7 @@ id: nextVoucherId(),
     $("#btnScZeroMarkAll").addEventListener("click", scZeroMarkAll);
     $("#btnScZeroCancel").addEventListener("click", scZeroCancel);
     $("#btnScZeroApply").addEventListener("click", scZeroApply);
-    $("#btnPosSave").addEventListener("click", savePosInvoice);
+    $("#btnPosSave").addEventListener("click", uiClickOnce(savePosInvoice, 1200));
     $("#txtPosDiscount").addEventListener("input", posRecalc);
     $("#cmbPosWarehouse").addEventListener("change", () => {
       const firstProd = products.find((p) => p.id === (posItems[0] && posItems[0].productId));
@@ -20629,7 +20748,7 @@ id: nextVoucherId(),
     $("#ppScanHint").addEventListener("click", (e) => {
       if (e.target.closest("[data-scan-new]")) { openProductDialogForScan(lastPpScan); return; }
     });
-    $("#btnPPSave").addEventListener("click", savePurchaseInvoice);
+    $("#btnPPSave").addEventListener("click", uiClickOnce(savePurchaseInvoice, 1200));
     $("#txtPPDiscount").addEventListener("input", ppRecalc);
 
     $("#dgvPItems tbody").addEventListener("input", (e) => {
@@ -20673,6 +20792,17 @@ id: nextVoucherId(),
     $("#sactPay").addEventListener("click", () => {
       hideModal("mSuppActions");
       openPaySuppDebt(actionsSupp);
+    });
+    $("#sactChecks").addEventListener("click", () => {
+      const supp = actionsSupp;
+      hideModal("mSuppActions");
+      if (!supp) return;
+      checksFilter.q = supp.nameAr || "";
+      checksFilter.status = "all";
+      const qEl = $("#txtChkSearch"); if (qEl) qEl.value = checksFilter.q;
+      const stEl = $("#chkStatusFilter"); if (stEl) stEl.value = "all";
+      showView("checks");
+      renderChecks();
     });
     $("#sactDelete").addEventListener("click", () => {
       const s = actionsSupp;
@@ -23578,6 +23708,8 @@ const pwEye = document.getElementById("btnShowPass");
       const o = orgs.find((x) => x.org_id === orgId);
       const name = (o && o.org_name) || "بدون اسم";
       const safeName = esc(name);
+      const orgNameOpts = (orgs || []).map((x) =>
+        '<option value="' + esc(x.org_name || "بدون اسم") + '"></option>').join("");
       const dlg = document.createElement("div");
       dlg.className = "modal-overlay";
       dlg.id = "resetOrgModal";
@@ -23585,8 +23717,9 @@ const pwEye = document.getElementById("btnShowPass");
         '<p class="login-sub" style="margin-bottom:8px;color:#b42318">⚠️ هذا الإجراء <b>لا رجعة فيه</b>: يمسح كل البيانات التشغيلية ' +
         "(فواتير، مرتجعات، سندات، قيود، عملاء، موردين، أصناف، مخزون، خزائن، موظفين، حضور، أصول، تصنيفات، أصحاب، مستندات)، " +
         "ويُعيد بذر شجرة الحسابات الافتراضية (٢٢ حسابًا + الصندوق الرئيسي). تُحفظ الحسابات (اليوزرات) وبيانات الشركة ومزاياها.</p>" +
-        '<p class="login-sub" style="margin-bottom:6px">اكتب <b>اسم الشركة</b> للتأكيد:</p>' +
-        '<input id="roConfirm" class="inp" placeholder="' + safeName + '" />' +
+        '<p class="login-sub" style="margin-bottom:6px">اكتب <b>اسم الشركة</b> للتأكيد (أو اختار من القائمة):</p>' +
+        '<input id="roConfirm" class="inp" list="roOrgNames" placeholder="' + safeName + '" />' +
+        '<datalist id="roOrgNames">' + orgNameOpts + '</datalist>' +
         '<p class="login-sub" style="margin:8px 0 6px">كلمة سر المالك (حسابك):</p>' +
         '<input id="roPass" class="inp" type="password" placeholder="كلمة مرور المالك" />' +
         '<div class="feat-btns" style="flex-direction:column;gap:8px;align-items:stretch;margin-top:10px">' +
@@ -25036,11 +25169,11 @@ const pwEye = document.getElementById("btnShowPass");
   function docSafeName(name) {
     return String(name || "").replace(/[\\/:*?"<>|\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
   }
-  // فولدر الجهة على القرص: «الرقم - اسم العميل/المورد» لسهولة الوصول للملف بالاسم (بناء 168)
+  // فولدر الجهة على القرص باسم العميل/المورد نفسه (بناء 229 — بلا رقم)
   function docPartyFolder(ctx) {
     const num = docPartyNum(ctx && ctx.code);
     const nm = docSafeName(ctx && ctx.name);
-    return nm ? (num + " - " + nm) : num;
+    return nm || ((ctx && ctx.type === "supplier") ? "مورد-" + num : "عميل-" + num);
   }
   // تفضيل المستخدم: يمنع ظهور تعليمات المسح أوتوماتيك (يبقى زرار «تعليمات المسح» للإظهار اليدوي)
   const LS_SCAN_NOHELP = "mizan_scan_nohelp_v1";
