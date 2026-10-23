@@ -1299,7 +1299,7 @@
   // 🆕 بناء 119: لوحة الإدارة بتتحدث كل 5 ثوانٍ — البطاقات + جدول الشركات + بطاقة المتصلين.
   // كان 15 ثانية بيحدّث البطاقة وحدها، فجدول الشركات كان بيفضل «🟢 متصل الآن» بعد ما
   // المستخدم يقفل البرنامج (شكوى المالك: «التحديث مش لحظي»). نافذة «متصل» على السحابة
-  // نفسها 110 ثانية (ترحيل ٢٢) ⇒ الشركة المقفولة بتتحول للأحمر خلال دقيقتين على الأكثر.
+  // بقت ٥ دقائق (ترقية ٦٩ — أمر المالك 23/10) ⇒ الشركة المقفولة بتتحول للأحمر خلال ٥ دقائق.
   let presenceViewTimer = null;
   function startPresenceView() {
     stopPresenceView();
@@ -3332,6 +3332,10 @@
     // 📷 بناء 144: البائع يسيب الفاتورة ويروح شاشة تانية ⇒ الكاميرا تقفل والمسدس ياخد
     // عادي. القفل هنا مش في الزرار بس — أي خروج من الشاشة (شريط/قائمة/برمجي) بيقفلها.
     if (scanCam.on) scanCamClose();
+    // 📱 بناء 239 (طلب المالك: «زرار واحد صغير يفتحها و يقفلها»): أي شاشة تتفتح —من الشريط
+    // أو برمجيًا— تطيّ الشريط على الموبايل عشان الشاشة تلاقي مساحة. على اللاب/الكمبيوتر
+    // إزالة الكلاس **بلا أي أثر** لأن `display` هناك جاي من القاعدة الأساسية مش من الكلاس.
+    setMobileNav(false);
     // حماية: تبويب «إعدادات ونسخ احتياطي المالك» لحسابات شركة المالك (بناء 133)
     // أي حساب تاني — حتى لو حاول فتحه برمجيًا — يتحوّل لـ«إعدادات مؤسستك».
     const isOwner = ownerHasAllAccess() || !!window.__isOwner;
@@ -20051,6 +20055,11 @@ id: nextVoucherId(),
   var DEPLOY_DB_EXCLUDE = {
     "db/supabase-rollback-59-profile-identity-guard.sql": "ملف رجوع احتياطي يزيل حارس ترقية ٥٩ ويعيد السياسة السابقة؛ لا يدخل حزمة النشر.",
     "db/supabase-rollback-60-profile-self-features-guard.sql": "ملف رجوع يعيد تعريف حارس ترقية ٥٩؛ لا يدخل حزمة النشر.",
+    // 🆕 ترقية ٦٩ (بناء 238): نافذة «متصل الآن» ٥ دقائق بدل 110 ثانية في mizan_presence_online
+    // و mizan_admin_orgs (ملف عادل 23/10). **لسه ما اتنفّذتش على السحابة** ⇒ مستبعدة من نسخة
+    // النشر: سيرفر جديد ما ياخدش ترقية غير مطبقة. أول ما تُنفَّذ (بأمر «نفّذ») تنضمّ لـ FILES
+    // — نفس مسار ترقية ٤٩ في بناء 128.
+    "db/supabase-upgrade-69-presence-5min.sql": "ترقية مكتوبة على القرص لسه ما اتنفّذتش على Supabase (نافذة الحضور ٥ دقايق)؛ تتضمّ لـ DEPLOY_DB_FILES بعد تنفيذها بأمر المالك.",
   };
   var DEPLOY_DATA_TABLES = ["organizations", "profiles",
     "accounts", "audit_logs", "car_trips", "categories", "cashier_shifts", "customer_txs", "customers",
@@ -21693,6 +21702,8 @@ id: nextVoucherId(),
     // 🛡 تنظيف أي أثر للحساب السابق (الخروج لازم يمسح الهوية مش البيانات فقط)
     resetSessionState();
     hideLoginExpiry();
+    // 📱 بناء 239: الخروج يرجّع الشريط مطوّيًا (لو المستخدم كان فاتحه على الموبايل).
+    setMobileNav(false);
     $("#loginScreen").hidden = false;
     $("#orgScreen").hidden = true;
     $("#memberScreen").hidden = true;
@@ -25508,9 +25519,39 @@ const pwEye = document.getElementById("btnShowPass");
       sec.classList.toggle("has-active", on);
     });
   }
+  /* 📱 بناء 239 (طلب المالك 23/10 حرفيًا: «اسطر ازرار التنقل ممكن يكون فى زرار واحد صغير
+     يفتحها و يقفلها» + «دا كله يخص شاشة الموبايل فقط و ليس شاشة اللاب او الكمبيوتر»).
+     القرار الهندسي: JS **بيلزق/يشيل كلاس** وبس — مافيش `if (innerWidth…)` جوّه المنطق،
+     ومافيش إعادة بناء للشجرة، ومافيش لمس لـ `hidden`/`style` (عشان الحارس الحيّ بتاع
+     المالك `ownerNodeIsHurt` بيفحص `hidden`+`style.display` بس، فالكلاس ما يستفزوش).
+     معنى الكلاس موجود **جوّه `@media screen and (max-width:860px)`** في styles.css وحده:
+     على اللاب `#sidebar.topnav{display:flex}` الأساسي بيفضل زي ما هو سواء الكلاس موجود
+     أو لا ⇒ الكمبيوتر ما يتأثرش (وده بيتقاس في حارس `check_mobile_pos_239.js`). */
+  function mobileNavOpen() {
+    const bar = document.getElementById("sidebar");
+    return !!(bar && bar.classList.contains("nav-open"));
+  }
+  function setMobileNav(open) {
+    const bar = document.getElementById("sidebar");
+    if (bar) bar.classList.toggle("nav-open", !!open);
+    const b = document.getElementById("btnNavToggle");
+    if (b) {
+      b.setAttribute("aria-expanded", open ? "true" : "false");
+      b.textContent = open ? "✕ التقسيم" : "☰ الأقسام";
+    }
+  }
   function wireTopNav() {
     const bar = document.getElementById("sidebar");
     if (!bar) return;
+    // 📱 بناء 239: زرار الطيّ في الهيدر (مخفي CSS على الكمبيوتر) — يفتح/يقفل سطور الأقسام.
+    // `stopPropagation` عشان المستمع العام («دوسة بره الشريط = قفل») ما يعدّيش الدوسة دي بره.
+    const navToggle = document.getElementById("btnNavToggle");
+    if (navToggle) {
+      navToggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setMobileNav(!mobileNavOpen());
+      });
+    }
     bar.addEventListener("click", (e) => {
       const t = e.target.closest("[data-sec-toggle]");
       if (t) {
@@ -25520,7 +25561,12 @@ const pwEye = document.getElementById("btnShowPass");
         return;
       }
       // اختيار شاشة من القائمة ⇒ القائمة تقفل والشاشة تتفتح (الربط القديم للزرار شغال لوحده)
-      if (e.target.closest(".nav-btn")) closeSections();
+      if (e.target.closest(".nav-btn")) {
+        closeSections();
+        // 📱 بناء 239: وعلى الموبايل كمان الشريط كله يطيّ، عشان الشاشة تلاقي مساحة
+        // (`#btnAdmin` مش `.nav-btn` — اتضمّن هنا لأن دوسته برضه بتفتح شاشة).
+        setMobileNav(false);
+      } else if (e.target.closest(".nav-admin")) setMobileNav(false);
     });
     // دوسة بره الشريط = قفل أي قائمة مفتوحة (زي أي شريط قوائم عادي)
     document.addEventListener("click", (e) => {
