@@ -1535,6 +1535,8 @@
     salesSyncInit();
     journalSyncInit();
     rowPushersInit();
+    // 🧱 بناء 240 (F4): مراقب «الرفع المعلق» — شريط عدّاد مقيس من الطوابير + آخر محاولة قبل الإغلاق
+    try { startUpPendingWatch(); } catch (e) { }
     try {
       if (!localStorage.getItem(LS_CUSTOMERS)) saveCustomers();
       if (!localStorage.getItem(LS_TXS)) saveTxs();
@@ -1799,12 +1801,19 @@
   // نفس مسار بقية الجداول: محلي أولًا (ما يضيعش)، ثم رفع للسحابة لو متصل، ثم لقطة الديسك.
   function saveFixedAssets() {
     localStorage.setItem(LS_FIXED_ASSETS, JSON.stringify(fixedAssets));
-    pushTable("fixed_assets"); syncToLocalDisk();
+    // 🧱 بناء 240: إعادة رفع عند الفشل بدل pushTable المطفي بصمت
+    // (لو جدول fixed_assets لسه مش على السحابة، syncOne بيرجع null والصفوف تفضل متسخة — بلا طنين).
+    fixedAssetsPusher.trackChanges();
+    fixedAssetsPusher.queue();
+    syncToLocalDisk();
   }
 
   function saveSuppliers() {
     localStorage.setItem(LS_SUPPLIERS, JSON.stringify(suppliers));
-    pushTable("suppliers"); syncToLocalDisk();
+    // 🧱 بناء 240: نفس النمط — المتسخ يفضل مطلوب لحد النجاح
+    suppliersPusher.trackChanges();
+    suppliersPusher.queue();
+    syncToLocalDisk();
   }
 
   function saveSupplierTxs() {
@@ -1952,6 +1961,12 @@
       now.forEach(function (sig, id) {
         if (!st.snap.has(id) || st.snap.get(id) !== sig) st.dirty.add(id);
       });
+      // 🧹 صنف انحذف من القائمة المحلية ولم يُرفع للسحابة فعلًا قط (مالوش صورة في st.snap)
+      //    يتشال من «مطلوب رفع»: لو فضّل فيها، الرفعة الجاية تبعت id لصنف مش موجود = سطر
+      //    وهمى بيظهر على الأجهزة التانية، والشريط «مطلوب رفع» يفضل عددًا كدّاب للأبد.
+      Array.from(st.dirty).forEach(function (id) {
+        if (!now.has(id) && !st.snap.has(id)) st.dirty.delete(id);
+      });
       st.snap.forEach(function (sig, id) {
         if (!now.has(id)) st.removed.add(id);
       });
@@ -1999,7 +2014,14 @@
           sentSigs.forEach(function (sig, id) { st.snap.set(id, sig); });
           removed.forEach(function (id) { st.snap.delete(id); });
         } else if (gen === st.gen) {
-          ids.forEach(function (id) { st.dirty.add(id); });
+          // 🧱 إعادة المحاولة مش عمياء: الصنف اللي لسه في القائمة يرجع «مطلوب رفع»،
+          //    واللي انحذف منها قبل ما الرفعة تنجح يرجع «مطلوب حذف» — وإلا يفضل في dirty
+          //    ويتبعت كأبسيرت لسطر مش موجود ⇒ **شبح على السحابة ما لوش صاحب**.
+          const nowList = listFn() || [];
+          ids.forEach(function (id) {
+            const stillThere = nowList.some(function (x) { return x && Number(x.id) === Number(id); });
+            if (stillThere) st.dirty.add(id); else st.removed.add(id);
+          });
           removed.forEach(function (id) { st.removed.add(id); });
         }
         if (gen === st.gen && queued && ok) queue(50);
@@ -2028,8 +2050,20 @@
   const customerTxPusher = makeRowPusher("customer_txs", function () { return txs; }, cloudRowSyncSig("customer_txs"));
   const supplierTxPusher = makeRowPusher("supplier_txs", function () { return supplierTxs; }, cloudRowSyncSig("supplier_txs"));
   const voucherPusher = makeRowPusher("vouchers", function () { return vouchers; }, cloudRowSyncSig("vouchers"));
+
+  // 🧱 بناء 240: الجداول اللي كانت بترفع بـ pushTable (fire-and-forget — فشل بلا إعادة وبلا أثر).
+  // الشيكات اللي اتعملت من الموبايل ووقعت في رفعة فاشلة ما بظهرتش في أي جهاز تاني خالص —
+  // من هنا أي صف متسخ بيفضل في st.dirty لحد ما الرفعة تنجح فعليًا (نفس آلية 235).
+  const checksPusher = makeRowPusher("checks", function () { return checks; }, cloudRowSyncSig("checks"));
+  const customersPusher = makeRowPusher("customers", function () { return customers; }, cloudRowSyncSig("customers"));
+  const suppliersPusher = makeRowPusher("suppliers", function () { return suppliers; }, cloudRowSyncSig("suppliers"));
+  const fixedAssetsPusher = makeRowPusher("fixed_assets", function () { return fixedAssets; }, cloudRowSyncSig("fixed_assets"));
+  const shiftPusher = makeRowPusher("cashier_shifts", function () { return shifts; }, cloudRowSyncSig("cashier_shifts"));
+  const tripPusher = makeRowPusher("car_trips", function () { return carTrips; }, cloudRowSyncSig("car_trips"));
+
   const rowPushers = [treasuryPusher, purchasePusher, saleReturnPusher, purchaseReturnPusher,
-    customerTxPusher, supplierTxPusher, voucherPusher];
+    customerTxPusher, supplierTxPusher, voucherPusher,
+    checksPusher, customersPusher, suppliersPusher, fixedAssetsPusher, shiftPusher, tripPusher];
 
   function rowPushersInit() {
     rowPushers.forEach(function (p) { p.init(); });
@@ -2045,6 +2079,98 @@
       if (list.indexOf(p.name) >= 0) p.markAllDirty();
     });
   }
+
+  /* 🧱 بناء 240 (F4): «مطلوب رفع للسحابة» بقى مقيسًا ومعلنًا.
+   * العلة: رفعة فشلت كانت بتسيب الصفوف متسخة في الطابور بصمت — المستخدم فاكر إنها وصلت،
+   * وبعدها يقفل الصفحة (الموبايل) فالطابور بيروح مع الذاكرة ⇒ الشيك/الفاتورة ما وصلوش خالص.
+   * من هنا: شريط ودّي فوق المحتوى بعدّاد مقيس من state بتاع الطوابير (مش تقدير) +
+   * آخر محاولة رفع قبل ما الصفحة تقفل + لقطة ديسك ضمان عند الإغلاق.
+   * (الكتلة دي محلة بعد تعريف كل الطوابير — `[salesPusher…].concat(rowPushers)` بتتقوَّم
+   * فور تعريفها، وحطها فوق كان بيرمي ReferenceError في هدوء الـ try/catch بتاع الإقلاع.) */
+  const ALL_ROW_PUSHERS = [salesPusher, journalPusher].concat(rowPushers);
+  const UP_PENDING_TICK_MS = 10000;
+  function uploadsPendingCount() {
+    let n = 0;
+    try {
+      if (typeof productsDirty !== "undefined") n += productsDirty.size + productsRemoved.size;
+      if (typeof accountsDirty !== "undefined") n += accountsDirty.size + accountsRemoved.size;
+    } catch (e) { }
+    ALL_ROW_PUSHERS.forEach(function (p) {
+      try { n += (p.state.dirty ? p.state.dirty.size : 0) + (p.state.removed ? p.state.removed.size : 0); } catch (e) { }
+    });
+    return n;
+  }
+  function ensureUpPendingBar() {
+    let el = document.getElementById("upPendingBar");
+    if (el) return el;
+    try {
+      el = document.createElement("div");
+      el.id = "upPendingBar";
+      el.className = "up-pending";
+      el.setAttribute("role", "status");
+      el.hidden = true;
+      const main = document.querySelector("main.content");
+      if (main && main.parentNode) main.parentNode.insertBefore(el, main);
+      else document.body.appendChild(el);
+    } catch (e) { el = null; }
+    return el;
+  }
+  function isUpOnline() {
+    // نفس مصدر قرار الرفع (A.online هو اللي flush بيتحقّق منه) — عشان الشريط مايعرفش حالة غير اللي جوّه الطابير.
+    return !!(A.online && typeof DATA !== "undefined" && DATA.isOnline && DATA.isOnline());
+  }
+  function inCompanySession() {
+    // نفس شرط اللي flush بيشترطه (مافيش رفعة بره شركة) — فالشريط ما يظهرش على شاشة الدخول.
+    try { return !!(typeof DATA !== "undefined" && DATA.orgId && DATA.orgId()); } catch (e) { return false; }
+  }
+  function updateUpPendingBanner() {
+    const el = ensureUpPendingBar();
+    if (!el) return;
+    let n = 0;
+    try { n = uploadsPendingCount(); } catch (e) { }
+    if (!n || !inCompanySession()) { el.hidden = true; return; }
+    const online = isUpOnline();
+    el.hidden = false;
+    el.textContent = online
+      ? "⏳ " + n + " تعديل لسه ما وصلش للسحابة — متقفلش البرنامج، بيدوّق يوصّلهم لوحده."
+      : "⏳ " + n + " تعديل مستني الإنترنت — بياناتك على الجهاز محفوظة، وهتوصل السحابة أول ما الشبكة ترجع.";
+  }
+  // 🧱 إعادة المحاولة الدورية: الطابور كان بيرجع الصفوف لـ dirty بصمت ومافيش حد بينادي queue() تاني
+  //    غير «زرّ online» بتاع المتصفح. من هنا المراقب نفسه هو اللي بيدق — فما يبقى معلّق لأبد.
+  //    A.adopting/A.cleaning مستثنيين: نداء في نص دمج السحابة = يرفع صف محلي فوق صف حيّ.
+  function upPendingRetry() {
+    if (A.adopting || A.cleaning) return;
+    if (!inCompanySession() || !isUpOnline()) return;
+    if (typeof productsDirty !== "undefined" && (productsDirty.size || productsRemoved.size)) productsQueuePush(0);
+    if (typeof accountsDirty !== "undefined" && (accountsDirty.size || accountsRemoved.size)) accountsQueuePush(0);
+    ALL_ROW_PUSHERS.forEach(function (p) {
+      try { if (p.state.dirty.size || p.state.removed.size) p.queue(0); } catch (e) { }
+    });
+  }
+  let upPendingTimer = null;
+  function startUpPendingWatch() {
+    if (upPendingTimer) return;
+    upPendingTimer = setInterval(function () {
+      try { updateUpPendingBanner(); } catch (e) { }
+      try { upPendingRetry(); } catch (e) { }
+    }, UP_PENDING_TICK_MS);
+    updateUpPendingBanner();
+  }
+  // 🧱 آخر محاولة قبل الإغلاق: flush() مباشرة (مش queue) — الـ setTimeout ما بيدّقش والمرحلة
+  //    دي بتموت مع الصفحة، فالنداء لازم يتطلق جوه المعالج نفسه. ومعاه ضمانة لقطة ديسك.
+  //    المنطق ده هو اللي بيمنع تكرار البلاغ: شيك اتسجّل والرفعة وقعت = يفضل مطلوبًا لحد ما يوصل.
+  try {
+    window.addEventListener("pagehide", function () {
+      try {
+        ALL_ROW_PUSHERS.forEach(function (p) {
+          if (p.state.dirty.size || p.state.removed.size) p.flush();
+        });
+        if (typeof productsDirty !== "undefined" && (productsDirty.size || productsRemoved.size)) productsFlush();
+        if (typeof accountsDirty !== "undefined" && (accountsDirty.size || accountsRemoved.size)) accountsFlush();
+      } catch (e) { }
+      try { syncToLocalDisk(); } catch (e) { }
+    });
+  } catch (e) { }
 
   function salesSyncInit() { salesPusher.init(); }
   function salesMarkAllDirty() { salesPusher.markAllDirty(); }
@@ -2078,21 +2204,31 @@
   }
 
   // 🆕 بناء 176: حفظ ورديات الكاشير — محلي أولًا ثم رفع سحابي ثم لقطة الديسك
+  // 🧱 بناء 240: رفعة بالصفوف المتسخة مع إعادة عند الفشل (كانت pushTable بلا إعادة).
   function saveShifts() {
     localStorage.setItem(LS_SHIFTS, JSON.stringify(shifts));
-    pushTable("cashier_shifts"); syncToLocalDisk();
+    shiftPusher.trackChanges();
+    shiftPusher.queue();
+    syncToLocalDisk();
   }
 
   // 🚚 بناء 178: حفظ رحلات سيارات المناديب — محلي أولًا ثم رفع سحابي ثم لقطة الديسك
+  // 🧱 بناء 240: نفس النمط — الصف الفاشل يفضل متسخ لحد ما الرفعة تنجح.
   function saveCarTrips() {
     localStorage.setItem(LS_CAR_TRIPS, JSON.stringify(carTrips));
-    pushTable("car_trips"); syncToLocalDisk();
+    tripPusher.trackChanges();
+    tripPusher.queue();
+    syncToLocalDisk();
   }
 
   // 🧾 بناء 190: حفظ الشيكات — محلي أولًا ثم رفع سحابي ثم لقطة الديسك
+  // 🧱 بناء 240: جذر بلاغ الموبايل — الشيك كان بيوصل لـ pushTable وفيه الرفعة بتطيح بصمت.
+  // من هنا أي شيك متغير أو جديد بيظل مطلوبًا في الطابور لحد ما السحابة تقبله.
   function saveChecks() {
     localStorage.setItem(LS_CHECKS, JSON.stringify(checks));
-    pushTable("checks"); syncToLocalDisk();
+    checksPusher.trackChanges();
+    checksPusher.queue();
+    syncToLocalDisk();
   }
 
   // 🧾 بناء 190: ضمان وجود «إنستا باي» (خزينة نظام محمية) + «المحفظة» الافتراضية لأي شركة
@@ -2103,7 +2239,8 @@
       if (!Array.isArray(treasury)) return;
       let changed = false;
       if (!treasury.some((t) => t && t.type === "instapay")) {
-        treasury.push({ id: treasury.reduce((m, x) => Math.max(m, Number(x.id) || 0), 0) + 1,
+        // 🧱 بناء 240: رقم محجوز في الأرضية الدائمة (`detUuid("treasury", id)`)
+        treasury.push({ id: idFloorTake("treasury", treasury),
           name: "إنستا باي", type: "instapay", balance: 0, system: true });
         changed = true;
       } else {
@@ -2160,7 +2297,10 @@
 
   function saveCustomers() {
     localStorage.setItem(LS_CUSTOMERS, JSON.stringify(customers));
-    pushTable("customers"); syncToLocalDisk();
+    // 🧱 بناء 240: نفس نمط 235 — العميل الجديد اللي الرفعة وقعت بيظل في الطابور
+    customersPusher.trackChanges();
+    customersPusher.queue();
+    syncToLocalDisk();
   }
 
   function saveTxs() {
@@ -2371,7 +2511,11 @@
     // (seedCustomers + ensureCashEntities). قبل كده على شركة فاضية أول عميل بيدخل
     // كان بياخد id = 1 ⇒ ensureCashEntities كان بيلقيه وبيبدّل اسمه لكاش وبيحميه،
     // فالفاتورة تختفي من القائمة من غير ما حد يممسها.
-    return Math.max(1, customers.reduce((m, c) => Math.max(m, Number(c.id) || 0), 0)) + 1;
+    // 🟥 بناء 240 (F2): الرقم بقى من الأرضية الدائمة `idFloorTake` — قبل كده كان
+    // «أكبر id موجود + 1»، فبعد مسح الحالة (خروج/تبديل شركة) كان يرجع يبدأ من 2
+    // و`detUuid("customers", 2)` يولّد uuid **محفوظ بالفعل** على السحابة ⇒ سطر عميل
+    // جديد يكتب فوق القديم صامتًا. الـ floorMin=1 بيحجز لكيان النقدية زي الأول.
+    return idFloorTake("customers", customers, 1);
   }
 
   // 🧱 بناء 199: الاحترام لأرضية الرقم — بعد أي حذف حركة، رقمها مايتولّدش تاني
@@ -2397,7 +2541,8 @@
 
   function nextSupplierId() {
     // 🔒 نفس حجز رقم 1 لكيان «المورد النقدي» النظامي (شوف nextCustomerId)
-    return Math.max(1, suppliers.reduce((m, s) => Math.max(m, Number(s.id) || 0), 0)) + 1;
+    // 🟥 بناء 240 (F2): من الأرضية الدائمة — نفس سبب العملاء.
+    return idFloorTake("suppliers", suppliers, 1);
   }
 
   function nextSupplierCode() {
@@ -6022,7 +6167,8 @@
   let editingProductId = null;
 
   function nextProductId() {
-    return products.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+    // 🟥 بناء 240 (F2): أرضية دائمة — الأصناف لها `detUuid("products", id)` على السحابة.
+    return idFloorTake("products", products);
   }
 
   function nextProductCode() {
@@ -9165,7 +9311,9 @@
     const invNo = $("#txtInvoiceNo").value || nextInvoiceNumber();
     const invDate = $("#dtpDate").value || todayISO();
     const invoice = {
-      id: sales.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1,
+      // 🟥 بناء 240 (F2): رقم الفاتورة من الأرضية الدائمة `idFloorTake` — ممنوع
+      // «أكبر id + 1» لأنه بعد مسح الحالة كان يعيد رقمًا الـuuid بتاعه على السحابة.
+      id: idFloorTake("sales", sales),
       invoiceNumber: invNo,
       invoiceNo: invNo,
       invoiceDate: invDate,
@@ -9855,7 +10003,8 @@
     const invNo = $("#txtPInvNo").value || nextPurchaseInvoiceNumber();
     const invDate = $("#dtpPDate").value || todayISO();
     const invoice = {
-      id: purchases.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1,
+      // 🟥 بناء 240 (F2): رقم من الأرضية الدائمة (شوف فاتورة البيع)
+      id: idFloorTake("purchases", purchases),
       invoiceNumber: invNo,
       invoiceNo: invNo,
       invoiceDate: invDate,
@@ -10946,7 +11095,8 @@
       fmt(Math.max(0, (Number(inv.grandTotal) || 0) - t.value)) + ' ج.م</b>';
   }
   function nextReturnId(isSales) {
-    return retList(isSales).reduce((m, r) => Math.max(m, Number(r.id) || 0), 0) + 1;
+    // 🟥 بناء 240 (F2): مرتجعات البيع والشراء ليها مساحتها المستقلة من الأرضية
+    return idFloorTake(isSales ? "saleReturns" : "purchaseReturns", retList(isSales));
   }
 
   /* ---- عرض جدول المرتجعات ---- */
@@ -11726,7 +11876,10 @@ id: nextVoucherId(),
       if (!hasBankData && !hasWalletData) {
         return false;
       }
-      let nextId = treasury.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1;
+      // 🟥 بناء 240 (F2): أول رقم من الأرضية الدائمة، مش «أكبر id + 1» — لو الحالة
+      // المحلية اتمسحت (خروج/تبديل شركة) القديم كان يرجع يبدأ من أول و`detUuid`
+      // يعيد uuid محفوظ على السحابة فيكتب حساب بنكي/محفظة فوق حساب تاني.
+      let nextId = idFloorTake("treasury", treasury);
       const built = [];
       const used = {};
       let changed = false;
@@ -11805,6 +11958,8 @@ id: nextVoucherId(),
 
       place(banks, "banks", "bank");
       place(wallets, "wallets", "wallet");
+      // 🟥 بناء 240 (F2): أي رقم اتصرف في الحلقة دي يدخل الأرضية (nextId آخر رقم مستعمل = nextId-1)
+      if (nextId > 1) bumpIdFloor("treasury", nextId - 1);
 
       treasury.forEach((t) => {
         if (used[t.id]) return;
@@ -12410,7 +12565,7 @@ id: nextVoucherId(),
   function checkIsOut(c) {
     return String((c && c.direction) || "in") === "out" || String((c && c.partyKind) || "customer") === "supplier";
   }
-  function nextCheckId() { return checks.reduce((m, c) => Math.max(m, Number(c && c.id) || 0), 0) + 1; }
+  function nextCheckId() { return idFloorTake("checks", checks); }
   function checkJrnKey(id) { const n = Number(id); return n > 0 ? "CH:" + n : ""; }
   /* 🆕 بناء 203 (بند #1 + #3): حركة التحصيل الجاية من «تحصيل بشيك» قيدها **مختلف** (CHCUST: + معرّف
      الشيك على حساب 1.1.7) مش قيد تحصيل عادي (CT:). الربط بين الحركة والشيك محفوظ على **الشيك نفسه**
@@ -12802,7 +12957,7 @@ id: nextVoucherId(),
   function activeShift() { return currentShift(); }
 
   function nextShiftId() {
-    return (shifts.reduce((m, x) => Math.max(m, x.id || 0), 0)) + 1;
+    return idFloorTake("shifts", shifts);
   }
 
   function shiftOverShortAccountName(treasuryName, cashierName) {
@@ -13345,7 +13500,7 @@ id: nextVoucherId(),
   let vanRepCache = null;
 
   function nextCarTripId() {
-    return (carTrips || []).reduce((m, t) => Math.max(m, Number(t.id) || 0), 0) + 1;
+    return idFloorTake("trips", carTrips);
   }
   function vanMainWh() {
     const w = String((settings && settings.vanMainWarehouse) || "").trim();
@@ -13484,7 +13639,7 @@ id: nextVoucherId(),
     try { renderJournal(); } catch (e) {}
   }
   function nextVanExpenseId(trip) {
-    return vanTripExpenses(trip).reduce((m, e) => Math.max(m, Number(e.id) || 0), 0) + 1;
+    return idFloorTake("vanExp", vanTripExpenses(trip));
   }
   function openVanExpenseDialog(tid) {
     const trip = vanTripById(tid);
@@ -14075,7 +14230,8 @@ id: nextVoucherId(),
     const due = Math.round((t.grand - paid) * 100) / 100;
     try { saleCostAlloc(vanSaleDraft.items); } catch (e) {}
     const invoice = {
-      id: sales.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1,
+      // 🧱 بناء 240: رقم فاتورة السيارة كمان من الأرضية الدائمة (نفس علة sales/purchases)
+      id: idFloorTake("sales", sales),
       invoiceNumber: invNo, invoiceNo: invNo,
       invoiceDate: trip.date, date: trip.date,
       customerId: cust.id, customerName: cust.nameAr, customer: cust.nameAr,
@@ -14397,7 +14553,7 @@ id: nextVoucherId(),
       }
     } else {
       const t = {
-        id: treasury.reduce((m, x) => Math.max(m, x.id), 0) + 1,
+        id: idFloorTake("treasury", treasury),
         name: name,
         type: type,
         accountNo: $("#tAccountNo").value.trim(),
@@ -14591,7 +14747,7 @@ id: nextVoucherId(),
   let editingAccountId = null;
 
   function nextAccountId() {
-    return accounts.reduce((m, a) => Math.max(m, a.id), 0) + 1;
+    return idFloorTake("accounts", accounts);
   }
 
   function nextAccountCode() {
@@ -15709,12 +15865,49 @@ id: nextVoucherId(),
   function nextVoucherId() {
     return Math.max(VOU_ID_FLOOR, vouchers.reduce((m, x) => Math.max(m, Number(x.id) || 0), 0)) + 1;
   }
+  /* 🧱 بناء 240 (باگ الموبايل): أرضيات دائمة لباقي الجداول — نفس علة build 186/199 بالحرف.
+     أي جدول بيرقّم سطره بـ`reduce(max)+1` على المصفوفة الحالية وحدها ⇒ بعد مسح الحالة
+     المحلية (تبديل شركة / لقطة ديسك / جهاز جديد) الرقم يرجع يبدأ من 1، و`detUuid(table, id)`
+     (cloud.js:14) بيولّد **نفس** الـuuid اللي صف السحابة شايله فعلًا ⇒ فرع
+     `on conflict (id) do update` يكتب فوق صف قديم بدل ما يضيف جديد — وده بالضبط «الفاتورة
+     الأولى وصلت من غير الشيك والثانية مسمعتش خالص». الأرقام بتتخزن في نفس مفتاح
+     `LS_ID_FLOORS` (بره `LS_ALL_KEYS` ⇒ المسح ما بيشيلهاش) وفي نفس كائن
+     `settings.idFloors` المتزامن (ترقية ٦٤) بدمج `max` فقط. */
+  let X_ID_FLOOR = {
+    sales: 0, purchases: 0, saleReturns: 0, purchaseReturns: 0, checks: 0,
+    shifts: 0, trips: 0, vanExp: 0, treasury: 0, customers: 0, suppliers: 0,
+    products: 0, accounts: 0, fixedAssets: 0
+  };
+  function xFloorOf(kind) { return Number(X_ID_FLOOR[kind]) || 0; }
+  function rowsMaxId(rows) {
+    return (rows || []).reduce((m, x) => Math.max(m, Number(x && x.id) || 0), 0);
+  }
+  // دمج «max فقط» لوعاء الأرضيات الجديد (من القرص أو من السحابة) — بلا أي نقصان
+  function xFloorsMerge(src) {
+    const s = src || {};
+    Object.keys(X_ID_FLOOR).forEach((k) => {
+      const n = Number(s[k]) || 0;
+      if (n > xFloorOf(k)) X_ID_FLOOR[k] = n;
+    });
+  }
+  // رقم محلي جديد + **حجزه فورًا** في الأرضية: حتى لو السطر ما اتحفظش (رفض/إلغاء)
+  // الرقم ما بيرجعش يتولّد تاني ويكتب فوق صف سحابي قديم.
+  // `floorMin` = رقم محجوز لكيان نظامي (مثال: id=1 للعميل/المورد النقدي).
+  function idFloorTake(kind, rows, floorMin) {
+    const base = Math.max(xFloorOf(kind), rowsMaxId(rows), Number(floorMin) || 0);
+    const n = base + 1;
+    X_ID_FLOOR[kind] = Math.max(xFloorOf(kind), n);
+    idFloorsPersist();
+    idFloorsPush();
+    return n;
+  }
   // رفع «الأرضية» عند الحذف (قبل ما الرقم يتاح للتوليد تاني) + تثبيتها على القرص
   function bumpIdFloor(kind, id) {
     const n = Number(id) || 0;
     if (kind === "voucher") { if (n > VOU_ID_FLOOR) VOU_ID_FLOOR = n; }
     else if (kind === "tx") { if (n > TX_ID_FLOOR) TX_ID_FLOOR = n; }
     else if (kind === "stx") { if (n > STX_ID_FLOOR) STX_ID_FLOOR = n; }
+    else if (Object.prototype.hasOwnProperty.call(X_ID_FLOOR, kind)) { if (n > xFloorOf(kind)) X_ID_FLOOR[kind] = n; }
     else { if (n > JRN_ID_FLOOR) JRN_ID_FLOOR = n; }
     idFloorsSave();
   }
@@ -15725,16 +15918,19 @@ id: nextVoucherId(),
     JRN_ID_FLOOR = Math.max(Number(o.journal) || 0, (journalEntries || []).reduce((m, x) => Math.max(m, Number(x && x.id) || 0), 0));
     TX_ID_FLOOR = Math.max(Number(o.txs) || 0, (txs || []).reduce((m, x) => Math.max(m, Number(x && x.id) || 0), 0));
     STX_ID_FLOOR = Math.max(Number(o.supplierTxs) || 0, (supplierTxs || []).reduce((m, x) => Math.max(m, Number(x && x.id) || 0), 0));
+    // 🧱 بناء 240: وعاء باقي الجداول (أرقامه من القرص/السحابة بس — المصفوفات بتترفع
+    // في `idFloorTake` وقت التوليد، فالدالة دي ما بتقراش أي مصفوفة جديدة)
+    xFloorsMerge(o.others);
     __jrnLastId = Math.max(__jrnLastId, JRN_ID_FLOOR);
   }
   function idFloorsSave() {
-    try { localStorage.setItem(LS_ID_FLOORS, JSON.stringify({ vouchers: VOU_ID_FLOOR, journal: JRN_ID_FLOOR, txs: TX_ID_FLOOR, supplierTxs: STX_ID_FLOOR })); } catch (e) { }
+    try { localStorage.setItem(LS_ID_FLOORS, JSON.stringify({ vouchers: VOU_ID_FLOOR, journal: JRN_ID_FLOOR, txs: TX_ID_FLOOR, supplierTxs: STX_ID_FLOOR, others: X_ID_FLOOR })); } catch (e) { }
     idFloorsPush();
   }
   // 🧾 بناء 201 (بند #13/٣): الأرضيات تتزامن بين الأجهزة عبر organizations.settings.idFloors
   //   (ترقية ٦٤) — دمج max فقط (الأرقام تزيد ومش بتنقص) ⇒ جهازان ما يكتبوش فوق بعض.
   let idFloorsPushTimer = null;
-  function idFloorsObj() { return { vouchers: VOU_ID_FLOOR, journal: JRN_ID_FLOOR, txs: TX_ID_FLOOR, supplierTxs: STX_ID_FLOOR }; }
+  function idFloorsObj() { return { vouchers: VOU_ID_FLOOR, journal: JRN_ID_FLOOR, txs: TX_ID_FLOOR, supplierTxs: STX_ID_FLOOR, others: X_ID_FLOOR }; }
   function idFloorsPersist() {
     try { localStorage.setItem(LS_ID_FLOORS, JSON.stringify(idFloorsObj())); } catch (e) { }
   }
@@ -15744,6 +15940,7 @@ id: nextVoucherId(),
     JRN_ID_FLOOR = Math.max(JRN_ID_FLOOR, Number(s.journal) || 0);
     TX_ID_FLOOR = Math.max(TX_ID_FLOOR, Number(s.txs) || 0);
     STX_ID_FLOOR = Math.max(STX_ID_FLOOR, Number(s.supplierTxs) || 0);
+    xFloorsMerge(s.others);   // 🧱 بناء 240: باقي الجداول بنفس قانون max
     __jrnLastId = Math.max(__jrnLastId, JRN_ID_FLOOR);
   }
   function idFloorsPush() {
@@ -17119,7 +17316,7 @@ id: nextVoucherId(),
   const faClass = (a) => (a && a.assetClass === "intangible" ? "intangible" : "noncurrent");
   const faLive = () => (Array.isArray(fixedAssets) ? fixedAssets.filter((a) => a && a.deleted !== true) : []);
   const faById = (id) => faLive().filter((a) => String(a.id) === String(id))[0];
-  const faNextLocalId = () => (Array.isArray(fixedAssets) ? fixedAssets.reduce((m, x) => Math.max(m, Number(x && x.id) || 0), 0) : 0) + 1;
+  const faNextLocalId = () => idFloorTake("fixedAssets", fixedAssets);
   // الصافي محسوب مش مخزّن: أي تعديل في التكلفة أو الإهلاك يبان فورًا في القائمة والكشف
   const faNet = (a) => bsRound((Number(a && a.cost) || 0) - (Number(a && a.accumDep) || 0));
   const faNetText = (a) => {
@@ -21909,6 +22106,22 @@ const pwEye = document.getElementById("btnShowPass");
   /* ================== بعد الدخول ================== */
   // 🛡 تنظيف حالة الجلسة: ما يفضلش أي أثر للحساب السابق في الذاكرة
   // (بيانات الجداول نفسها تفضل في localStorage بس هتُفحص عند الدخول بـ guardOrgSwitch)
+  // 🔒 بناء 240 (باگ الموبايل): «ختم الحالة» (LS_STATE_ORG) ملك **الشركة** مش الجلسة ⇒
+  // ممنوع نشيله عند الخروج. كان بيمسحه من build 119 ⇒ أي «خروج ثم دخول **لنفس الشركة**»
+  // يلاقي حالة بلا ختم ⇒ `guardOrgSwitch()` تنادي `wipeLocalTables()` وتشف **كل** مفاتيح
+  // `LS_ALL_KEYS` — ومن بينها الشيكات (`LS_CHECKS`) وورديات الكاشير ورحلات السيارات
+  // والفواتير اللي لسه ما رفعتش للسحابة. بلاغ المالك الحرفي: «الشيكات كانت موجودة في
+  // الموبايل واختفت لما خرجت من البرنامج ودخلت تاني».
+  // العزل المطلوب من build 119 لسه شغال بالظبط: الختم بيقول الحالة دي بتاعة شركة إيه،
+  // فالدخول على **شركة تانية** لسه يمسح قبل أي رفع (`owned !== org`)، ومافيش بقايا
+  // حساب تنسب لشركة جديدة. الطمأنة التانية إن المسح ما كانش آمن أصلًا: «البيانات
+  // الحقيقية بأمان على السحابة» كانت **كلام غير مقيس** — أي سطر فشل رفعه (أو اتلغّى
+  // رفعه بصمت) كان بيتمسح من الجهاز ومفيش نسخة منه على السحابة.
+  // الحصانتين الليخليتانا نطمن على ترك الحالة:
+  //   (١) `org_id` بتتحط سحابيًا من `current_org()` (ترقية ٢٧) مش من الحمولة، و
+  //   (٢) الدمج بعد الدخول (`adoptCloud`) بيعيد طابور رفع أي سطر محلي مالوش مثيل في
+  //       السحابة (`mergeCloudLocal` + `rowPushersMarkChanged`) ⇒ السطر اللي لسه ما
+  //       رفعش اتشل يرفع نفسه، بدل ما يتمسح من الجهاز.
   function resetSessionState() {
     window.__isOwner = false;
     csetData = null;
@@ -21916,9 +22129,6 @@ const pwEye = document.getElementById("btnShowPass");
     lastOrgMembers = null;
     // خريطة معرّفات السحابة تخص الشركة السابقة → نفضيها
     if (window.MIZAN_STATE) window.MIZAN_STATE.idMap = {};
-    // 🔑 build 119: الحالة المحلية بقت «غير مختومة» = مجهولة الملكية ⇒ الدخول
-    // الجاي يمسحها قبل أي رفع (مافيش بقايا الحساب ده تنسب لحساب تاني)
-    try { localStorage.removeItem(LS_STATE_ORG); } catch (e) { }
     // 🛡 نرجّع الجداول لحالة تجريبية نظيفة (مفيش بقايا بيانات شركة في الذاكرة)
     // مع منع أي رفع للسحابة أثناء التنظيف
     A.cleaning = true;
@@ -21933,8 +22143,14 @@ const pwEye = document.getElementById("btnShowPass");
   // بنفتحها دلوقتي = حالة من حساب/شركة تانية ⇒ تُمسح قبل أي رفع للسحابة.
   // build 119: «ختم ملكية الحالة» (LS_STATE_ORG) هو الحكم — السبب الجذري إن
   // عملاء/موردين من حساب المالك اترفعوا لشركة «امين» اللي اتعملت فاضية.
-  // البيانات الحقيقية بأمان على السحابة وبتنزل تاني في adoptCloud، فمسح حالة
-  // غير مختومة لا يُفقد أحد شيئًا (وممنوع يرفعه لشركة تانية).
+  // ⚠️ بناء 240: الجملة اللي كانت هنا («البيانات الحقيقية بأمان على السحابة وبتنزل
+  // تاني في adoptCloud، فمسح حالة غير مختومة لا يُفقد أحد شيئًا») **كانت غلط وما
+  // اتقاستش**: رفع أي جدول بيرجع `null` بصمت لما الجدول السحابي ناقص، و`syncOne`
+  // ما بيعيدش المحاولة، والسطر اللي ما رفعش كان بيتمسح هنا ومفيش نسخة منه على
+  // السحابة (شيكات/ورديات/رحلات/فواتير — بلاغ الموبايل). المسح ده بقى بيحصل **بس**
+  // لما الختم لشركة تانية (أو حالة مجهولة المصدر: جهاز جديد/لقطة ديسك/وضع تجريبي)؛
+  // الخروج والدخول لنفس الشركة ما بيرفعوش الختم تاني (`resetSessionState`) ⇒ الحالة
+  // بتاعت الشركة بتفضل على الجهاز والسطور اللي ما رفعتش بتعيد طابورها في adoptCloud.
   function guardOrgSwitch() {
     const org = DATA && DATA.org && DATA.org() ? DATA.org().id : null;
     if (!org) return;
