@@ -9,7 +9,7 @@
  */
 "use strict";
 
-const SW_VERSION = "296";
+const SW_VERSION = "297";
 
 self.addEventListener("install", (event) => {
   // من غير انتظار: فعّل النسخة الجديدة فورًا
@@ -25,6 +25,14 @@ self.addEventListener("activate", (event) => {
         await Promise.all(keys.map((k) => caches.delete(k)));
       } catch (e) { /* تجاهل */ }
       await self.clients.claim();
+      /* 📲 بناء 297: الإشارة للنوافذ الحيّة — الـPWA المفتوح من الهوم اسكرين ممكن
+         يقعد أيام بكود قديم بلا ريلود (بلاغ المالك 5/11). الصفحة (297+) بتقرر هي:
+         مافيش فاتورة منفتحة ⇒ ريلود شفاف؛ فيه شغل ⇒ توست ودّي. الإشارة مجرد
+         فأنا مقترح، صفر تجبر وسط فاتورة شغّالة. */
+      try {
+        const cs = await self.clients.matchAll({ includeUncontrolled: true, type: "window" });
+        cs.forEach((c) => { try { c.postMessage({ type: "MIZAN_SW_UPDATED", version: SW_VERSION }); } catch (e) { } });
+      } catch (e) { /* تجاهل */ }
     })()
   );
 });

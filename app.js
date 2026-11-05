@@ -4093,6 +4093,42 @@
     });
     return parts.join("\n");
   }
+  /* 🖋️ بناء 297: خطوط الورقة لازم تكون جاهزة قبل الرسم — التوليد بيبدأ لحظة فتح النافذة
+     (295)، وعلى جهاز إقلاعه أول مرة (خصائص PWA) الخطوط العربية ممكن تكون لسه بيحمّل
+     فالكانفس تطلع بحروف ناقصة/فاضية. سقف 3 ثواني عشان ما نعلّقش المشاركة على شبكة بطيئة. */
+  async function invoiceFontsReady() {
+    try {
+      await Promise.race([
+        (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve(),
+        new Promise((r) => setTimeout(r, 3000)),
+      ]);
+    } catch (e) { }
+  }
+  /* 🧾 بناء 297 — كشف «الورقة الفاضية» بالحرف: بلاغ المالك (5/11) إن PDF/طباعة على الموبايل
+     بتيجي ورقة فاضية لحساب المندوب. المقياس (d297_mobile_repro): نفس الرسم على كروم
+     390×844 DPR3 طلع 8.3% بكسلات مترسمة (مش أبيض) ⇒ الفاضية عند جهازه (ذاكرة الرسم/
+     كود قديم داخل PWA شغّال من أيام) — فبعد كل رسم بنقيس الكانفس نفسه: لو طلع أبيض،
+     نعيد الرسك بنصف مساحة الذاكرة (scale=1)؛ ولو فضل أبيض نرمي رسالة ودّية بدل ما
+     نسلم المندوب ملف PDF فاضي يوصل للعميل. */
+  function invoiceCanvasBlank(canvas) {
+    try {
+      if (!canvas || !canvas.width || !canvas.height) return true;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return true;
+      const w = canvas.width, h = canvas.height, N = 24;
+      const d = ctx.getImageData(0, 0, w, h).data;
+      const stepX = Math.max(1, Math.floor(w / N)), stepY = Math.max(1, Math.floor(h / N));
+      let ink = 0, tot = 0;
+      for (let x = 0; x < w; x += stepX) {
+        for (let y = 0; y < h; y += stepY) {
+          const i = (y * w + x) * 4;
+          tot++;
+          if (((d[i] < 240) || (d[i + 1] < 240) || (d[i + 2] < 240)) && d[i + 3] > 0) ink++;
+        }
+      }
+      return ink / Math.max(1, tot) < 0.008; /* أقل من 0.8% متحسّب = ورقة بيضاء */
+    } catch (e) { return false; }
+  }
   async function invoicePdfBlob(inv) {
     if (!inv) throw new Error("فاتورة غير موجودة");
     if (!pdfLibsReady()) throw new Error("ملفات PDF مش محمّلة — افتح البرنامج متصل مرة واحدة.");
@@ -4108,9 +4144,16 @@
     document.body.appendChild(holder);
     try {
       const target = holder.querySelector("#invoicePage") || holder;
-      const canvas = await window.html2canvas(target, {
+      await invoiceFontsReady();
+      let canvas = await window.html2canvas(target, {
         scale: 2, backgroundColor: "#ffffff", logging: false, useCORS: false
       });
+      /* 🧾 بناء 297: ستريم الحكم — كانفس أبيض ⇒ إعادة الرسم بمساحة نصف الذاكرة، ولو
+         فضل أبيض ⇒ خطأ ودّي (بدل ما نسلّم PDF فاضي يوصل للعميل)؛ الخام في console. */
+      if (invoiceCanvasBlank(canvas)) {
+        canvas = await window.html2canvas(target, { scale: 1, backgroundColor: "#ffffff", logging: false, useCORS: false });
+        if (invoiceCanvasBlank(canvas)) throw new Error("تعذّر رسم الفاتورة على الجهاز (ورقة فاضية) — جرّب تاني.");
+      }
       const pdf = new window.jspdf.jsPDF({ orientation: "p", unit: "mm", format: "a4", compress: true });
       const w = pdf.internal.pageSize.getWidth();
       const h = pdf.internal.pageSize.getHeight();
@@ -4157,7 +4200,11 @@
       try { await ensurePdfLibs(); } catch (e) { }
       return invoicePdfBlob(inv);
     })();
-    job.catch(() => { }); /* الفشل صامت هنا: الضغطة نفسها هي اللي هتورّي الرسالة وقتها */
+    /* 🧾 بناء 297: الـWeakMap كان بيحفظ **الوعد المرفوض نفسه** — أول تعثر (شبكة/رسم على
+       جهاز متعثر) كان يعطّل المشاركة للأبد في نفس الفاتورة حتى بعد افتها متصل، وكل دوسة
+       من بعد بتعيد رمي نفس الفشل من الكاش. مسحه أول ما الوعد يرفض ⇒ الدوسة اللي بعده
+       بتعيد التوليد حقيقيًا. الصمت هنا مقصود: الضغطة نفسها هي اللي بتوري الرسالة (292). */
+    job.catch(() => { try { invoicePdfMemo.delete(inv); } catch (e) { } });
     invoicePdfMemo.set(inv, job);
     return job;
   }
@@ -4183,7 +4230,13 @@
     document.body.appendChild(holder);
     try {
       const target = holder.querySelector("#invoicePage") || holder;
-      const canvas = await window.html2canvas(target, { scale: 2, backgroundColor: "#ffffff", logging: false, useCORS: false });
+      await invoiceFontsReady();
+      let canvas = await window.html2canvas(target, { scale: 2, backgroundColor: "#ffffff", logging: false, useCORS: false });
+      /* 🧾 بناء 297: نفس ستريم `حكم الورقة الفاضية` — إعادة بنصف الذاكرة ثم خطأ ودّي */
+      if (invoiceCanvasBlank(canvas)) {
+        canvas = await window.html2canvas(target, { scale: 1, backgroundColor: "#ffffff", logging: false, useCORS: false });
+        if (invoiceCanvasBlank(canvas)) throw new Error("تعذّر رسم الفاتورة على الجهاز (ورقة فاضية) — جرّب تاني.");
+      }
       return await new Promise((res) => {
         let done = false;
         const fin = (b) => { if (!done) { done = true; res(b || null); } };
@@ -4223,8 +4276,22 @@
       const name = pdfFileSafeName(inv.invoiceNumber || inv.invoiceNo) + ".pdf";
       const file = new File([blob], name, { type: "application/pdf" });
       const title = "فاتورة " + (inv.invoiceNumber || "");
+      /* 🧾 بناء 297 — تشخيص جهاز المالك (console بس — صفر نص تقني على أي شاشة):
+         أول ما الفاتورة تيجي جاهزة ببايتها، وبعدها كل فرع من سلّم المشاركة بيكتب نتيجه —
+         لو بلاغ «بيتبعت نص بس» تكرر عند المندوب، سجل المتصفح بيقول انهي فرع تشغّل فعلًا. */
+      try {
+        console.warn("[mizan] الفاتورة جاهزة للمشاركة:", pdfFileSafeName(inv.invoiceNumber || inv.invoiceNo),
+          Math.round(blob.size / 1024) + "KB",
+          "canShare=" + (typeof navigator.canShare === "function"),
+          "canShare(files)=" + !!(navigator.canShare && navigator.canShare({ files: [file] })),
+          "share=" + (typeof navigator.share === "function"));
+      } catch (e2) { }
       const text = title + " — الإجمالي " + fmt(inv.grandTotal) + " ج.م" + (shareTextExtra || "");
+      /* 🧲 بناء 297: علم «تم تجربة ملف PDF» — الفرع ٢بن الجديد ما يجربش من الأصل
+         لو الفروع ١/٢ جربوا الملف فعلًا؛ ودي إشارة بالتسليم لو رجعنا نقيّس بعدها. */
+      let pdfShareTried = false;
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        pdfShareTried = true;
         try {
           await navigator.share({ files: [file], title: title, text: text });
           try { addActivity("مشاركة PDF", title + " · ملف PDF"); } catch (e) { }
@@ -4239,6 +4306,7 @@
       }
       /* ٢) متصفح بيشارك لكن بوابة canShare نفسها مش عنده (iOS قديم / ويوف داخل واتس): بيلف الملف من غير ما يسأل */
       if (!navigator.canShare && navigator.share) {
+        pdfShareTried = true;
         try {
           await navigator.share({ files: [file], title: title, text: text });
           try { addActivity("مشاركة PDF", title + " · ملف PDF (بلا canShare)"); } catch (e) { }
@@ -4247,6 +4315,22 @@
         } catch (e) {
           if (e && e.name === "AbortError") { toast("اتلغت المشاركة.", "info"); return; }
           /* لو الـwebview ما قبلش ملفات خالص ⇒ الفرع تحت هو الجواب الصحيح */
+        }
+      }
+      /* 🧲 بناء 297 — الفرع ٢بن: موبايل بيجاوب canShare(files)=**false** وبيقبل الملفات فعلًا
+         (بلاغ المالك 5/11: المندوب بيرسله الرقم والمبلغ نص وبس). الفروع ١ و٢ أصلا سايبين
+         بالحرف — ده تجربة إضافية واحدة بعد الاتنين وقبل الصورة: الإلغاء محترم هنا (AbortError)،
+         وأي رفض تاني بينزل على احتياط الصورة زي ما هو. */
+      if (navigator.share && !pdfShareTried) {
+        pdfShareTried = true;
+        try {
+          await navigator.share({ files: [file], title: title, text: text });
+          try { addActivity("مشاركة PDF", title + " · ملف PDF (محاولة بديل)"); } catch (e) { }
+          toast("الفاتورة اتبعتت كملف PDF — اختار واتساب من نافذة المشاركة وابعتها.", "success");
+          return;
+        } catch (e) {
+          if (e && e.name === "AbortError") { toast("اتلغت المشاركة.", "info"); return; }
+          /* برفض ⇒ نزول على الصورة زي ما هو */
         }
       }
       /* ٣) صورة PNG احتياطي — «عايز صورة الفاتورة هى اللى توصل على الواتس» */
@@ -4290,7 +4374,10 @@
          رسايلنا العربية الجاهزة («ملفات PDF مش محمّلة…» / «فاتورة غير موجودة») بتفضل زي ما هي
          لأن هي نفسها فيها الحل — الحارس check_niceerr_296 بيشوف الحالة دي بالرحلة. */
       const raw = (e && typeof e.message === "string") ? e.message : "";
-      const ours = raw.indexOf("ملفات PDF مش محمّلة") === 0 || raw.indexOf("فاتورة غير موجودة") === 0;
+      /* 🧾 بناء 297: «تعذّر رسم الفاتورة (ورقة فاضية)» رسالتنا اللي بترميها `نكشف الورقة
+         الفاضية` — بتعدي زي ما هي زي «ملفات PDF مش محمّلة» لأنها نفسها فيها الحل. */
+      const ours = raw.indexOf("ملفات PDF مش محمّلة") === 0 || raw.indexOf("فاتورة غير موجودة") === 0 ||
+        raw.indexOf("تعذّر رسم الفاتورة") === 0;
       toast(ours ? raw : "الفاتورة تعذّرت دلوقتي — اقفل البرنامج وافتحه وانت متصل بالنت، وبعدين جرّب تاني.", "warning");
       /* التشخيص الخام (رسالة المكتبة الإنجليزية) بيقعد في console بس — مافيش نسخة منه
          في سجل الحركات ولا في أي نص بيقراه المستخدم، عشان السجل ده بيوصل لشاشة العميل. */
@@ -31664,4 +31751,29 @@ const pwEye = document.getElementById("btnShowPass");
   }
 
   document.addEventListener("DOMContentLoaded", init);
+
+  /* 📲 بناء 297 — تحديث الحيّ من غير دوسة من المالك: الـPWA المفتوح من الهوم اسكرين
+     ممكن يقعد أيام بالكود القديم من غير ريلود (ده اللي خلى بلاغ 5/11 «بيتبعت نص»
+     وصف صورة «مافيش صورة بتتخلق» يبدو زي بلاغ 295 القديم بالحرف). الـSW لما يتنصيب
+     نسخة جديدة بيدي إشارة واحدة، والصفحة هنا بتقرر وحدها: مافيش نافذة فاتورة منفتحة
+     ⇒ ريلود شفاف؛ فيه فاتورة شغّالة ⇒ توست ودّي يقول «اكمل شغلك وبعدين اقفل وافتح»
+     — صفر تجبرReload وسط شغل المندوب. الـlistener ده بينفع من 297 وجاي (الصفحات
+     الأقدم من 297 محتاجة اقفال/فتح مرة واحدة زي رسالة 296 الودّية). */
+  try {
+    if (navigator.serviceWorker && typeof navigator.serviceWorker.addEventListener === "function") {
+      navigator.serviceWorker.addEventListener("message", (ev) => {
+        const d = ev && ev.data;
+        if (!d || d.type !== "MIZAN_SW_UPDATED" || String(d.version) === String(window.MIZAN_BUILD)) return;
+        const modalOpen = !!document.querySelector(".modal-overlay:not([hidden])");
+        try {
+          if (!modalOpen) {
+            toast("تحديث البرنامج نزل — بنشغّل النسخة الجديدة…", "info");
+            setTimeout(() => { try { location.reload(); } catch (e2) { } }, 1400);
+          } else {
+            toast("تحديث البرنامج جاهز — كمّل الفاتورة واقفل البرنامج وافتحه تاني.", "info");
+          }
+        } catch (e2) { }
+      });
+    }
+  } catch (e) { }
 })();
