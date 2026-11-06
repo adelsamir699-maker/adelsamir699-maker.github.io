@@ -4147,7 +4147,9 @@
     const holder = document.createElement("div");
     holder.id = "pdfHold";
     holder.setAttribute("dir", "rtl");
-    holder.style.cssText = "position:absolute;left:-12000px;top:0;width:210mm;background:#fff;color:#000;overflow:hidden;";
+    /* 📱 بناء 298: تثبيت العنصر خلف كل المحتويات (z-index:-9999) في الموضع الطبيعي بدل
+       left:-12000px الذي كان يتسبب في كانفس أبيض/ورقة فاضية على متصفحات الموبايل (Blink/WebKit). */
+    holder.style.cssText = "position:fixed;left:0;top:0;width:210mm;min-height:297mm;background:#ffffff;color:#000000;z-index:-9999;pointer-events:none;opacity:1;margin:0;padding:0;overflow:visible;";
     holder.innerHTML = '<style>' + scopeCssToHolder(collectPrintCss(), "#pdfHold") +
       '\n#pdfHold .print-only{display:block !important;}\n</style>' +
       $("#invoicePage").outerHTML;
@@ -4155,14 +4157,26 @@
     try {
       const target = holder.querySelector("#invoicePage") || holder;
       await invoiceFontsReady();
-      let canvas = await window.html2canvas(target, {
-        scale: 2, backgroundColor: "#ffffff", logging: false, useCORS: false
-      });
-      /* 🧾 بناء 297: ستريم الحكم — كانفس أبيض ⇒ إعادة الرسم بمساحة نصف الذاكرة، ولو
-         فضل أبيض ⇒ خطأ ودّي (بدل ما نسلّم PDF فاضي يوصل للعميل)؛ الخام في console. */
+      const h2cOpts = {
+        scale: 2,
+        backgroundColor: "#ffffff",
+        logging: false,
+        useCORS: true,
+        allowTaint: true,
+        scrollX: 0,
+        scrollY: 0,
+        x: 0,
+        y: 0,
+        windowWidth: 1024
+      };
+      let canvas = await window.html2canvas(target, h2cOpts);
+      /* 🧾 بناء 298: فحص الكانفس وإعادة المحاولة مع خيارات توافقية تضمن عدم الخروج بورقة بيضاء */
       if (invoiceCanvasBlank(canvas)) {
-        canvas = await window.html2canvas(target, { scale: 1, backgroundColor: "#ffffff", logging: false, useCORS: false });
-        if (invoiceCanvasBlank(canvas)) throw new Error("تعذّر رسم الفاتورة على الجهاز (ورقة فاضية) — جرّب تاني.");
+        canvas = await window.html2canvas(target, Object.assign({}, h2cOpts, { scale: 1 }));
+        if (invoiceCanvasBlank(canvas)) {
+          canvas = await window.html2canvas(target, Object.assign({}, h2cOpts, { scale: 1.5, windowWidth: 1200 }));
+          if (invoiceCanvasBlank(canvas)) throw new Error("تعذّر رسم الفاتورة على الجهاز (ورقة فاضية) — جرّب تاني.");
+        }
       }
       const pdf = new window.jspdf.jsPDF({ orientation: "p", unit: "mm", format: "a4", compress: true });
       const w = pdf.internal.pageSize.getWidth();
@@ -4233,7 +4247,7 @@
     const holder = document.createElement("div");
     holder.id = "pdfHold";
     holder.setAttribute("dir", "rtl");
-    holder.style.cssText = "position:absolute;left:-12000px;top:0;width:210mm;background:#fff;color:#000;overflow:hidden;";
+    holder.style.cssText = "position:fixed;left:0;top:0;width:210mm;min-height:297mm;background:#ffffff;color:#000000;z-index:-9999;pointer-events:none;opacity:1;margin:0;padding:0;overflow:visible;";
     holder.innerHTML = '<style>' + scopeCssToHolder(collectPrintCss(), "#pdfHold") +
       '\n#pdfHold .print-only{display:block !important;}\n</style>' +
       $("#invoicePage").outerHTML;
@@ -4241,10 +4255,21 @@
     try {
       const target = holder.querySelector("#invoicePage") || holder;
       await invoiceFontsReady();
-      let canvas = await window.html2canvas(target, { scale: 2, backgroundColor: "#ffffff", logging: false, useCORS: false });
-      /* 🧾 بناء 297: نفس ستريم `حكم الورقة الفاضية` — إعادة بنصف الذاكرة ثم خطأ ودّي */
+      const h2cOpts = {
+        scale: 2,
+        backgroundColor: "#ffffff",
+        logging: false,
+        useCORS: true,
+        allowTaint: true,
+        scrollX: 0,
+        scrollY: 0,
+        x: 0,
+        y: 0,
+        windowWidth: 1024
+      };
+      let canvas = await window.html2canvas(target, h2cOpts);
       if (invoiceCanvasBlank(canvas)) {
-        canvas = await window.html2canvas(target, { scale: 1, backgroundColor: "#ffffff", logging: false, useCORS: false });
+        canvas = await window.html2canvas(target, Object.assign({}, h2cOpts, { scale: 1 }));
         if (invoiceCanvasBlank(canvas)) throw new Error("تعذّر رسم الفاتورة على الجهاز (ورقة فاضية) — جرّب تاني.");
       }
       return await new Promise((res) => {
@@ -4300,47 +4325,54 @@
       /* 🧲 بناء 297: علم «تم تجربة ملف PDF» — الفرع ٢بن الجديد ما يجربش من الأصل
          لو الفروع ١/٢ جربوا الملف فعلًا؛ ودي إشارة بالتسليم لو رجعنا نقيّس بعدها. */
       let pdfShareTried = false;
+      /* 📲 بناء 298: إرسال الملف مباشرة بدون text لمنع واتساب على أندرويد من استبدال الملف بالنص فقط */
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         pdfShareTried = true;
         try {
-          await navigator.share({ files: [file], title: title, text: text });
+          await navigator.share({ files: [file], title: title });
           try { addActivity("مشاركة PDF", title + " · ملف PDF"); } catch (e) { }
           toast("الفاتورة اتبعتت كملف PDF — اختار واتساب من نافذة المشاركة وابعتها.", "success");
           return;
         } catch (e) {
-          /* 📲 بناء 292: قفل المستخدم لنافذة المشاركة (AbortError) = إلغاء محترم — لا رسالة كاذبة ولا تنزيل */
           if (e && e.name === "AbortError") { toast("اتلغت المشاركة.", "info"); return; }
-          /* 🧾 بناء 295: أية رفض أخرى (انتهت تسكّند اللمس/تعارض/قيود على الـPDF) ⇒
-             **منزلش على النص على طول** — ينزلق لصورة الـPNG الأول (طلب المالك) */
+          try {
+            await navigator.share({ files: [file], title: title, text: text });
+            try { addActivity("مشاركة PDF", title + " · ملف PDF (مع نص)"); } catch (e2) { }
+            toast("الفاتورة اتبعتت كملف PDF — اختار واتساب من نافذة المشاركة وابعتها.", "success");
+            return;
+          } catch (e2) {
+            if (e2 && e2.name === "AbortError") { toast("اتلغت المشاركة.", "info"); return; }
+          }
         }
       }
-      /* ٢) متصفح بيشارك لكن بوابة canShare نفسها مش عنده (iOS قديم / ويوف داخل واتس): بيلف الملف من غير ما يسأل */
+      /* ٢) متصفح بيشارك لكن بوابة canShare نفسها مش عنده (iOS قديم / ويبفيو): مشاركة الملف مباشرة */
       if (!navigator.canShare && navigator.share) {
         pdfShareTried = true;
         try {
-          await navigator.share({ files: [file], title: title, text: text });
+          await navigator.share({ files: [file], title: title });
           try { addActivity("مشاركة PDF", title + " · ملف PDF (بلا canShare)"); } catch (e) { }
           toast("الفاتورة اتبعتت كملف PDF — اختار واتساب من نافذة المشاركة وابعتها.", "success");
           return;
         } catch (e) {
           if (e && e.name === "AbortError") { toast("اتلغت المشاركة.", "info"); return; }
-          /* لو الـwebview ما قبلش ملفات خالص ⇒ الفرع تحت هو الجواب الصحيح */
+          try {
+            await navigator.share({ files: [file], title: title, text: text });
+            return;
+          } catch (e2) {
+            if (e2 && e2.name === "AbortError") { toast("اتلغت المشاركة.", "info"); return; }
+          }
         }
       }
-      /* 🧲 بناء 297 — الفرع ٢بن: موبايل بيجاوب canShare(files)=**false** وبيقبل الملفات فعلًا
-         (بلاغ المالك 5/11: المندوب بيرسله الرقم والمبلغ نص وبس). الفروع ١ و٢ أصلا سايبين
-         بالحرف — ده تجربة إضافية واحدة بعد الاتنين وقبل الصورة: الإلغاء محترم هنا (AbortError)،
-         وأي رفض تاني بينزل على احتياط الصورة زي ما هو. */
+      /* 🧲 بناء 298 — محاولة بديلة لمشاركة الملف كملف مستند */
       if (navigator.share && !pdfShareTried) {
         pdfShareTried = true;
         try {
-          await navigator.share({ files: [file], title: title, text: text });
+          await navigator.share({ files: [file], title: title });
           try { addActivity("مشاركة PDF", title + " · ملف PDF (محاولة بديل)"); } catch (e) { }
           toast("الفاتورة اتبعتت كملف PDF — اختار واتساب من نافذة المشاركة وابعتها.", "success");
           return;
         } catch (e) {
           if (e && e.name === "AbortError") { toast("اتلغت المشاركة.", "info"); return; }
-          /* برفض ⇒ نزول على الصورة زي ما هو */
         }
       }
       /* ٣) صورة PNG احتياطي — «عايز صورة الفاتورة هى اللى توصل على الواتس» */
@@ -4351,17 +4383,20 @@
           pngFile = new File([png], pdfFileSafeName(inv.invoiceNumber || inv.invoiceNo) + ".png", { type: "image/png" });
         }
       } catch (e) { }
-      /* الشبكة «!navigator.canShare» هنا احتياط **بعد** ما الفرع ٢ جرّب الـPDF بالفعل:
-         ويوف بيقبل الصورة ويرفض الملفات التانية ⇒ أحسن ما نقع على التنزيل. */
       if (pngFile && (!navigator.canShare || navigator.canShare({ files: [pngFile] }))) {
         try {
-          await navigator.share({ files: [pngFile], title: title, text: text });
+          await navigator.share({ files: [pngFile], title: title });
           try { addActivity("مشاركة PDF", title + " · صورة"); } catch (e) { }
           toast("الفاتورة اتبعتت كصورة — اختار واتساب من نافذة المشاركة وابعتها.", "success");
           return;
         } catch (e) {
           if (e && e.name === "AbortError") { toast("اتلغت المشاركة.", "info"); return; }
-          /* رفض ⇒ نزول للوسيلة اللي بعدها */
+          try {
+            await navigator.share({ files: [pngFile], title: title, text: text });
+            return;
+          } catch (e2) {
+            if (e2 && e2.name === "AbortError") { toast("اتلغت المشاركة.", "info"); return; }
+          }
         }
       }
       /* ٤) بره الموبايل/متصفح بلا مشاركة ملفات: تنزيل PDF + رسالة نصية على واتس (بلا أي API سحابي) */
@@ -4374,7 +4409,17 @@
       } catch (e) { }
       window.open("https://wa.me/?text=" + encodeURIComponent(text), "_blank");
       try { addActivity("مشاركة PDF", title + " (تنزيل + واتس)"); } catch (e) { }
-      toast("PDF اتنزّل على جهازك — واتس فتح برسالة، ابعت الملف من ملفات التنزيلة.", "success");
+      /* 📲 بناء 302 — بلاغ المالك (6/11): «اللي بيتبعت على الواتس رقم الفاتورة ومبلغها فقط».
+         لو المتصفح مالوش مشاركة ملفات (البرنامج مفتوح جوه واتساب/فيسبوك عادةً) مفيش قوة في
+         الكود ترفق ملف في wa.me — الحل الوحيد إنه يفتح البرنامج من كروم. بنقولها بالعربي
+         الواضح + زرار واحد يفتحه، بدل رسالة مطمْئنة بتخلي المندوب يفتكر إن الفاتورة اتبعتت. */
+      const canFile = canShareFilesNow();
+      if (!canFile) {
+        showOpenInBrowserBar(true);
+        toast("الملف نزل PDF على جهازك، بس المتصفح اللي فاتح بيه البرنامج مش بيسمح بإرساله تلقائي — افتح البرنامج من كروم (الزرار اللي تحت) وبعدها «📄 واتس» هيبعت الفاتورة ملف PDF.", "warning");
+      } else {
+        toast("PDF اتنزّل على جهازك — واتس فتح برسالة، ابعت الملف من ملفات التنزيلة.", "success");
+      }
     } catch (e) {
       /* 🙂 بناء 296 — صفر نص خام قدام العميل: السطر اللي كان هنا (مورّث من 292) كان بيطبع
          رسالة المكتبة الإنجليزية زي ما رفعها html2canvas/jsPDF، فكان المالك أو المندوب يقرا
@@ -4396,7 +4441,75 @@
     }
   }
 
-  /* ================== الروترة بين الشاشات ================== */
+  /* 📲 بناء 302 — «افتح في كروم»: بلاغ المالك 6/11 «اللي بيتبعت على الواتس رقم الفاتورة
+     ومبلغها فقط». القياس من الكود نفسه: الملف ما بيتبعتش إلا من Web Share API بملفات.
+     البرنامج بيتفتح كتير من **داخل واتساب** (اللينك جاي على واتساب) — ومتصفح واتساب الداخلي
+     مالوش `navigator.share` بملفات ⇒ كل فروع المشاركة بتسقط على آخر فرع (تنزيل + نص).
+     مش ممكن لأي كود ويب يرفق ملف في رابط wa.me؛ فالطريق الصحيح: نودّيه متصفح كامل بزرار واحد. */
+  function canShareFilesNow() {
+    try { return typeof navigator.share === "function"; } catch (e) { return false; }
+  }
+  function isInAppBrowserNow() {
+    try {
+      const ua = String(navigator.userAgent || "");
+      if (!/Android|iPhone|iPad|iPod|Mobile/i.test(ua)) return false;
+      /* WebView أندرويد: ; wv) — وواتساب/فيسبوك/إنستجرام/لاين بيكتبوا نفس علمهم */
+      if (/;\s*wv\)/i.test(ua)) return true;
+      return /WhatsApp|FBAN|FBAV|FB_IAB|Instagram|Line\/|Twitter/i.test(ua);
+    } catch (e) { return false; }
+  }
+  function openInExternalBrowser() {
+    try {
+      const href = String(location.href);
+      const ua = String(navigator.userAgent || "");
+      if (/Android/i.test(ua)) {
+        const u = new URL(href);
+        location.href = "intent://" + u.host + u.pathname + u.search +
+          "#Intent;scheme=" + String(u.protocol).replace(":", "") + ";package=com.android.chrome;end";
+        return;
+      }
+      if (/iPhone|iPad|iPod/i.test(ua)) {
+        /* سفاري مش بيفتح من جوه تطبيق تاني بسهولة — كروم iOS بيقبل المخطط ده */
+        location.href = href.replace(/^https:/i, "googlechrome:").replace(/^http:/i, "googlechromes:");
+        return;
+      }
+      window.open(href, "_blank");
+    } catch (e) { }
+  }
+  function showOpenInBrowserBar(force) {
+    try {
+      if (!force && canShareFilesNow()) return;
+      if (!force && !isInAppBrowserNow()) return;
+      if (document.getElementById("mizanOpenInBrowser")) return;
+      const d = document.createElement("div");
+      d.id = "mizanOpenInBrowser";
+      d.setAttribute("dir", "rtl");
+      d.style.cssText = "position:fixed;inset-inline:8px;bottom:10px;z-index:99999;background:#0a1a15;color:#fff;" +
+        "border:1px solid #2f7d61;border-radius:14px;padding:11px 12px;box-shadow:0 10px 30px rgba(0,0,0,.5);" +
+        "font-family:inherit;font-size:13px;line-height:1.75;";
+      d.innerHTML =
+        '<div style="display:flex;gap:8px;align-items:flex-start">' +
+        '<div style="flex:1">📲 <b>الفاتورة محتاجة متصفح كامل</b> — البرنامج مفتوح من داخل واتساب، ' +
+        'والمتصفح ده مش بيسمح بإرسال ملف PDF. افتح البرنامج من <b>كروم</b> (أو ثبّته على الشاشة الرئيسية) ' +
+        'وزرار «📄 واتس» هيبعت الفاتورة نفسها ملف PDF.</div>' +
+        '<button type="button" id="mizanOpenInBrowserX" aria-label="إغلاق" style="background:transparent;color:#9fd7c2;border:0;font-size:18px;line-height:1;padding:2px 4px;cursor:pointer">✕</button>' +
+        '</div>' +
+        '<div style="margin-top:9px;display:flex;gap:8px;flex-wrap:wrap">' +
+        '<button type="button" id="mizanOpenInBrowserGo" style="flex:1;min-width:150px;background:#1f9d6b;color:#fff;border:0;border-radius:10px;padding:9px 12px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">🌐 افتح في كروم</button>' +
+        '<button type="button" id="mizanOpenInBrowserStay" style="background:#16302a;color:#d7f3e7;border:1px solid #2f7d61;border-radius:10px;padding:9px 12px;font-family:inherit;font-size:13px;cursor:pointer">متابعة هنا</button>' +
+        '</div>';
+      document.body.appendChild(d);
+      const x = document.getElementById("mizanOpenInBrowserX");
+      const st = document.getElementById("mizanOpenInBrowserStay");
+      const go = document.getElementById("mizanOpenInBrowserGo");
+      const bye = () => { try { d.remove(); } catch (e) { } };
+      if (x) x.addEventListener("click", bye);
+      if (st) st.addEventListener("click", bye);
+      if (go) go.addEventListener("click", () => { openInExternalBrowser(); });
+    } catch (e) { }
+  }
+
+
   const BUILT_VIEWS = ["dashboard", "customers", "products", "sales", "purchases", "suppliers", "returns", "returnsReg", "treasury", "accounts", "journal", "balance", "treasuryStatements", "reports", "users", "audit", "settings", "clientSettings",
 
     // 🆕 بناء 125: دول كانوا **ناقصين من القائمة** فزرار «كشف حساب الحسابات»
@@ -17628,7 +17741,7 @@ id: nextVoucherId(),
         '<td>' + r.kind + '</td>' +
         '<td>' + esc(r.label) +
         // 🧾 بناء 286: زرار PDF واتس لسطور بيع الرحلة — يولّد من داتا الفاتورة وقت ضغطه (زي القاعدة)
-        (r.type === "sale" && r.sid ? ' <button class="btn small sky" type="button" data-vanlogpdf="' + esc(r.sid) + '">📄 واتس</button>' : '') +
+        (r.type === "sale" && r.sid ? ' <button class="btn small sky" type="button" data-vanlogpdf="' + esc(r.sid) + '">📄 واتس</button> <button class="btn small gray" type="button" data-vanlogprint="' + esc(r.sid) + '">🖨️ طباعة</button>' : '') +
         '</td>' +
         '<td><b>' + fmt(r.amount) + '</b></td>' +
         '<td>' + eff + '</td></tr>';
@@ -18162,16 +18275,37 @@ id: nextVoucherId(),
       const inv = vanPdfCtx; vanPdfCtx = null; hideModal("mVanSalePdf");
       if (inv) printInvoice(inv);
     });
+    add("btnVanPdfView", "click", async () => {
+      const inv = vanPdfCtx; vanPdfCtx = null; hideModal("mVanSalePdf");
+      if (!inv) return;
+      try {
+        toast("جاري فتح PDF الفاتورة...", "info");
+        const blob = await invoicePdfCached(inv);
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank");
+      } catch (e) {
+        toast("تعذّر فتح PDF: " + (e && e.message ? e.message : e), "warning");
+      }
+    });
     add("btnVanPdfClose", "click", () => { vanPdfCtx = null; hideModal("mVanSalePdf"); });
-    // 🧾 بناء 286: PDF واتس لكل فاتورة من سجل حركات المندوب (زرار «📄 واتس» جوّه سطر الفاتورة)
+    // 🧾 بناء 286 / 298: PDF واتس وطباعة لكل فاتورة من سجل حركات المندوب
     const vLogBody = $("#vanLogBody");
     if (vLogBody) {
       vLogBody.addEventListener("click", (e) => {
         const b = e.target.closest("[data-vanlogpdf]");
-        if (!b) return;
-        const inv = (sales || []).find((x) => x && String(x.id) === b.getAttribute("data-vanlogpdf"));
-        if (!inv) { toast("الفاتورة مش موجودة على الجهاز.", "warning"); return; }
-        shareInvoicePdf(inv);
+        if (b) {
+          const inv = (sales || []).find((x) => x && String(x.id) === b.getAttribute("data-vanlogpdf"));
+          if (!inv) { toast("الفاتورة مش موجودة على الجهاز.", "warning"); return; }
+          shareInvoicePdf(inv);
+          return;
+        }
+        const bp = e.target.closest("[data-vanlogprint]");
+        if (bp) {
+          const inv = (sales || []).find((x) => x && String(x.id) === bp.getAttribute("data-vanlogprint"));
+          if (!inv) { toast("الفاتورة مش موجودة على الجهاز.", "warning"); return; }
+          printInvoice(inv);
+          return;
+        }
       });
     }
     // نافذة التصفية
@@ -31848,6 +31982,9 @@ const pwEye = document.getElementById("btnShowPass");
     // 🧭 بناء 284 (#358): تسليح زرار الرجوع في أندرويد — يتوصّل مرة واحدة عند الإقلاع،
     // قبل أي مسار دخول (سحابي/أوفلاين) عشان يشتغل في الحالتين.
     pageBackWire();
+    /* 📲 بناء 302: البرنامج مفتوح جوه واتساب/فيسبوك (بلا Web Share بملفات) ⇒ تنبيه ودّي
+       وزرار «افتح في كروم» — لأن مشاركة الفاتورة PDF مستحيلة من متصفح التطبيق الداخلي. */
+    try { showOpenInBrowserBar(false); } catch (e) { }
     /* 146: الختم من `verLabel()` = **رقم التحديث** (أمر المالك 07/10 ≈21:36: «ماتكتبش 1.4.1
        اكتب 146»)، مش من `APP_VERSION` (رقم المنتج). مقاس في كروم الحقيقي: السطحين بياخدوا
        من نفس مصدر `window.mizanVerLabel()`، وده بيتنفذ **قبل** ختم `index.html` (آخر مكتِب). */
