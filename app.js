@@ -1540,14 +1540,64 @@
       }
     } catch (e) { }
     if (!p.stock || typeof p.stock !== "object") return Number(p && p.qty) || 0;
-    const specific = wh ? (Number(p.stock[wh]) || 0) : NaN;
-    if (!isNaN(specific) && specific > 0) return specific;
-    // إذا لم توجد كمية في المستودع المحدد (اسم مختلف/قديم) بينما الكمية موجودة في مخازن أخرى
-    // نعود إلى الإجمالي بدلًا من منع البيع ظنًا بأن المخزون صفر.
+    const keys = Object.keys(p.stock);
+    if (!keys.length) return Number(p && p.qty) || 0;
+    /* 📲 بناء 303 — بلاغ المالك 6/11 (بعد تصحيحه): «حط حمولة السيارة في المستودع 1 اللي
+       المفروض إنه فارغ في شركة lbn». السبب الجذري: أي مخزن **مش مكتوب بالاسم الحرفي**
+       في خريطة الصنف كان بيرجع **إجمالي كل المخازن** — والإجمالي فيه حمولة العربية ⇒
+       المستودع الفارغ يظهر مليان، والجرد/التحميل منه يعدّي بلا رصيد (وأحيانًا الجرد
+       بيثبّت الإجمالي جوّه المستودع فعلًا). القاعدة الجديدة بالترتيب:
+         ١) اسم المخزن موجود بالحرف ⇒ **قيمته حتى لو صفر**.
+         ٢) موجود باختلاف كتابة (تطويل/تشكيل/ى/ة/همزات/مسافات) ⇒ قيمة المفتاح ده.
+         ٣) المخزن **معروف في قائمة الشركة** (أو سيارة مناديب) ومش في الخريطة ⇒ **صفر**
+            — المستودع الفارغ فاضي، مهما كان فيه في مخازن/عربيات تانية.
+         ٤) اسم مش معروف أصلًا (دليل قديم/اتغيّر) ⇒ الإجمالي — احتياطي بناء 196 بالحرف
+            عشان ما نرفضش بيعًا في مخزون موجود بسبب فرق تسمية. */
+    if (wh) {
+      const k = whKeyInStock(p.stock, wh);
+      if (k) return Math.round((Number(p.stock[k]) || 0) * 100) / 100;
+      if (isKnownWhOrCar(wh)) return 0;
+    }
     let total = 0;
-    Object.keys(p.stock).forEach((k) => total += Number(p.stock[k]) || 0);
-    if (total > 0) return total;
-    return isNaN(specific) ? 0 : specific;
+    keys.forEach((k) => total += Number(p.stock[k]) || 0);
+    return Math.round(total * 100) / 100;
+  }
+
+  /* مطابقة اسم مخزن/سيارة لخريطة مخزون الصنف: بالحرف أولًا، وبعدين بعد تطبيع عربي
+     (تطويل/تشكيل/ألف/ى/ة/مسافات) — عشان «المخزن الرئيسى» و«المخزن الرئيسي» يبقوا واحد. */
+  function whNameNorm(n) {
+    return String(n == null ? "" : n)
+      .replace(/[\u0640]/g, "")
+      .replace(/[\u064B-\u065F\u0670]/g, "")
+      .replace(/[أإآٱ]/g, "ا")
+      .replace(/ى/g, "ي")
+      .replace(/ة/g, "ه")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+  function whKeyInStock(stock, wh) {
+    if (!stock || typeof stock !== "object" || !wh) return "";
+    if (Object.prototype.hasOwnProperty.call(stock, wh)) return wh;
+    const w = whNameNorm(wh);
+    if (!w) return "";
+    const k = Object.keys(stock).find((x) => whNameNorm(x) === w);
+    return k || "";
+  }
+  /* أسماء المخازن/السيارات المعروفة في الشركة (إعدادات + الاحتياطي + سيارات المناديب). */
+  function isKnownWhOrCar(name) {
+    const n = whNameNorm(name);
+    if (!n) return false;
+    try {
+      if (settListByName("warehouses").some((x) => whNameNorm(x) === n)) return true;
+    } catch (e) { }
+    try {
+      if ((WAREHOUSES || []).some((x) => whNameNorm(x) === n)) return true;
+    } catch (e) { }
+    try {
+      if (vanCarNames().some((x) => whNameNorm(x) === n)) return true;
+    } catch (e) { }
+    return false;
   }
 
   function setStockAt(p, wh, v) {
@@ -10011,14 +10061,16 @@
 
     const whSel = $("#cmbPosWarehouse");
     const prevWh = whSel.value;
+    /* 📲 بناء 303: المندوب ما يتعرضش لقائمة مستودعات الشركة أصلًا — خيار واحد = عربيته. */
+    const repCarNow = (() => { try { return posRepCarNow(); } catch (e) { return ""; } })();
     whSel.innerHTML = "";
-    warehouseList().forEach((w) => {
+    (repCarNow ? [repCarNow] : warehouseList()).forEach((w) => {
       const opt = document.createElement("option");
       opt.value = w;
       opt.textContent = w;
       whSel.appendChild(opt);
     });
-    if (prevWh) whSel.value = prevWh;
+    if (prevWh && (!repCarNow || prevWh === repCarNow)) whSel.value = prevWh;
 
     fillPosDatalist();
     posUpdatePartyBalance("sale");
@@ -10057,21 +10109,21 @@
   function productStockQty(p, wh) {
     if (!p) return 0;
     if (p.stock && typeof p.stock === "object") {
-      /* المخزن المختار بالاسم الحقيقي: صفرُه صفر حتى لو الصنف له رصيد في مخزن تاني.
-         لو الاسم مش موجود أصلًا (دليل قديم) نرجع للمجموع حتى ما تبقاش كل الأصناف صفر. */
-      if (wh && Object.prototype.hasOwnProperty.call(p.stock, wh)) {
-        return Number(p.stock[wh]) || 0;
-      }
+      /* 📲 بناء 303: نفس قاعدة `stockAt` — المفتاح الموجود قيمته حتى لو صفر، والمخزن
+         المعروف الغائب = صفر (مش إجمالي المخازن). الاحتياطي للإجمالي للأسماء القديمة بس. */
       const keys = Object.keys(p.stock);
       if (keys.length) {
-        return keys.reduce((sum, k) => sum + (Number(p.stock[k]) || 0), 0);
+        const k = whKeyInStock(p.stock, wh);
+        if (k) return Number(p.stock[k]) || 0;
+        if (wh && isKnownWhOrCar(wh)) return 0;
+        return keys.reduce((sum, x) => sum + (Number(p.stock[x]) || 0), 0);
       }
     }
     return Number(p.qty) || 0;
   }
-  function productsByStockQty(wh) {
+  function sortProductsByStockQty(list, wh) {
     const rank = productSalesRank();
-    return products.filter((p) => p.isActive).sort((a, b) => {
+    return (list || []).slice().sort((a, b) => {
       const sa = productStockQty(a, wh);
       const sb = productStockQty(b, wh);
       if (sb !== sa) return sb - sa;
@@ -10080,6 +10132,9 @@
       if (rb !== ra) return rb - ra;
       return String(a.nameAr || "").localeCompare(String(b.nameAr || ""), "ar");
     });
+  }
+  function productsByStockQty(wh) {
+    return sortProductsByStockQty(products.filter((p) => p.isActive), wh);
   }
   /* اسم قديم محفوظ للتوافق مع الحرّاس والنداءات السابقة — الترتيب بقى بالمخزون. */
   function productsByMostSold() { return productsByStockQty(); }
@@ -10094,21 +10149,21 @@
     /* بناء 220: الترتيب بمخزن الشاشة نفسها (بيع/شراء) — نفس الرصيد اللي المستخدم شايفه. */
     const whSel = kind === "sale" ? $("#cmbPosWarehouse") : $("#cmbPPWarehouse");
     const wh = (whSel && whSel.value) || WAREHOUSES[0];
-    /* 🛡 بناء 268: المندوب بيقترحله **أصناف عربيته بس** — كان بيرجع الكتالوج كامل. */
-    const all = vanRepVisibleProducts(productsByStockQty(wh));
-    /* 🔎 بناء 279: البحث بيطبّع بنفس `arFold` (تطويل/تشكيل/أرقام عربية) عشان الكتابة تلاقي
-       حتى لو الاسم متكتب بـ «ـ» أو الأرقام عربية — كان `normalizeAr` بيسيبهم فالقائمة تفضل ثابتة. */
+    /* 🔎 بناء 303 — سرعة البحث على الموبايل: الفلترة **قبل** الترتيب. قبل كده كنا
+       بنرتّب الكتالوج كله (مقارنة مخزون + مبيعات + عربي) على **كل حرف**، وبعدين
+       نفلتر النتيجة ⇒ مع كتالوج كبير الكتابة كانت بتتلجلج على الموبايل. الترتيب
+       نفسه ما اتغيّرش: نفس المقارنة بالحرف على النتائج بس. */
     const q = arFold(raw);
-    // فاضي (ضغط على الخانة/السهم) ⇒ كل الأصناف مرتّبة بكمية المخزن المختار
-    if (!q) return all;
-    const hit = [];
-    all.forEach((p) => {
-      const name = arFold(p.nameAr);
-      const code = arFold(p.code == null ? "" : p.code);
-      const bc = arFold(p.barcode == null ? "" : p.barcode);
-      if (name.indexOf(q) >= 0 || code.indexOf(q) >= 0 || bc.indexOf(q) >= 0) hit.push(p);
-    });
-    return hit;
+    let base = products.filter((p) => p.isActive);
+    if (q) {
+      base = base.filter((p) => {
+        const name = arFold(p.nameAr);
+        const code = arFold(p.code == null ? "" : p.code);
+        const bc = arFold(p.barcode == null ? "" : p.barcode);
+        return name.indexOf(q) >= 0 || code.indexOf(q) >= 0 || bc.indexOf(q) >= 0;
+      });
+    }
+    return sortProductsByStockQty(vanRepVisibleProducts(base), wh);
   }
   function productSuggestHide(kind) {
     const el = $(scanDropSel(PROD_DROP_FIELD[kind]));
@@ -18965,16 +19020,32 @@ id: nextVoucherId(),
     } catch (e) { return ""; }
   }
   /* تثبيت مخزن السيارة + بانر المندوب + إخفاء «إضافة صنف جديد للمخزن». */
+  /* 📲 بناء 303 — «مخزون سيارة المندوب فقط» على شاشة البيع (بلاغ المالك 6/11).
+     كان التثبيت معلّق على `vanIsRepUser()` وحدها؛ ولو تعريف المندوب لسه ما اكتملش
+     (سجل السيارات/الرحلات لسه نازل، أو التعيين بالاسم الكامل) بترجع false ⇒ القائمة
+     تفضل **كل مستودعات الشركة** ظاهرة للمندوب. القرار الجديد: مصدر التثبيت = وجود
+     **رحلة مفتوحة بتاعته** (أو وضع بيع سيارة اختاره المالك)، مش مجرد تعريف الحساب. */
+  function posRepCarNow() {
+    try {
+      if (vanSellTripCtx) return String(vanSellTripCtx.car || "").trim();
+      const t = vanRepOpenTrip();
+      if (t && String(t.carName || "").trim()) return String(t.carName).trim();
+      if (vanIsRepUser()) return String(vanRepPosCar() || "").trim();
+    } catch (e) { }
+    return "";
+  }
   function applyPosRepMode() {
     try {
       const vanCtx = vanSellTripCtx;                    // 🧾 بناء 294: صاحب الشركة على رحلة مختارة
-      if (!vanIsRepUser() && !vanCtx) {
+      const repCar = vanCtx ? String(vanCtx.car || "").trim() : posRepCarNow();
+      if (!repCar) {
         const b0 = $("#posVanBanner"); if (b0) { b0.hidden = true; b0.innerHTML = ""; }
         const w0 = $("#cmbPosWarehouse"); if (w0) w0.disabled = false;
+        const wr0 = w0 ? w0.closest(".fld-wh") : null; if (wr0) wr0.hidden = false;
         const q0 = $("#btnQuickAddProduct"); if (q0) q0.hidden = false;
         return;
       }
-      const car = vanCtx ? String(vanCtx.car || "") : vanRepPosCar();
+      const car = repCar;
       const wh = $("#cmbPosWarehouse");
       if (wh) {
         const cur = car || wh.value;
@@ -18982,6 +19053,9 @@ id: nextVoucherId(),
         if (car) { const o = document.createElement("option"); o.value = car; o.textContent = car; wh.appendChild(o); }
         wh.value = cur || "";
         wh.disabled = true;   // 🚚 مخزون السيارة فقط — ثابت لا يتغير
+        /* 📲 بناء 303: الحقل نفسه بيختفي — مش قائمة مقفولة (المندوب مش محتاج يشوف
+           أسماء مستودعات أصلًا)، والبانر فوق بيقول «بيع من سيارة …» بالاسم. */
+        const wrap = wh.closest(".fld-wh"); if (wrap) wrap.hidden = true;
       }
       const q = $("#btnQuickAddProduct"); if (q) q.hidden = true;
       const trip = vanCtx ? vanTripById(vanCtx.tripId) : vanRepOpenTrip();
@@ -25716,9 +25790,13 @@ id: nextVoucherId(),
       if (document.getElementById("cmbPosWarehouse")) {
         const w = $("#cmbPosWarehouse").value;
         const s = $("#cmbPosWarehouse");
+        /* 📲 بناء 303: نفس قاعدة الشاشة — المندوب ما يتعرضش لكل المستودعات حتى بعد
+           حفظ إعدادات؛ وبعد الملء نعيد تثبيت وضع المندوب (كان ده منفذ فتح القائمة). */
+        const repCarNow2 = (() => { try { return posRepCarNow(); } catch (e) { return ""; } })();
         s.innerHTML = "";
-        warehouseList().forEach((x) => { const o = document.createElement("option"); o.value = x; o.textContent = x; s.appendChild(o); });
-        if (w) s.value = w;
+        (repCarNow2 ? [repCarNow2] : warehouseList()).forEach((x) => { const o = document.createElement("option"); o.value = x; o.textContent = x; s.appendChild(o); });
+        if (w && (!repCarNow2 || w === repCarNow2)) s.value = w;
+        try { applyPosRepMode(); } catch (e) { }
       }
       if (document.getElementById("cmbPPWarehouse")) {
         const w = $("#cmbPPWarehouse").value;
@@ -27259,6 +27337,10 @@ id: nextVoucherId(),
     $("#btnPosSave").addEventListener("click", uiClickOnce(savePosInvoice, 1200));
     $("#txtPosDiscount").addEventListener("input", posRecalc);
     $("#cmbPosWarehouse").addEventListener("change", () => {
+      /* 📲 بناء 303: حتى لو حصل تغيير برمجي/بلوحة مفاتيح، مندوب الرحلة ما ينزلش على غير عربيته. */
+      const rc = (() => { try { return posRepCarNow(); } catch (e) { return ""; } })();
+      const sel = $("#cmbPosWarehouse");
+      if (rc && sel && sel.value !== rc) { sel.value = rc; try { applyPosRepMode(); } catch (e) { } }
       const firstProd = products.find((p) => p.id === (posItems[0] && posItems[0].productId));
       posUpdateBadge(firstProd || null);
     });
