@@ -17160,6 +17160,32 @@ id: nextVoucherId(),
      بيفضل للسيارة-بس لما السجل لسه ما نزلش، (٥) إعادة تقييم على كل مسارات الإقلاع.
      صفر كتابة سحابية. */
   const LS_VAN_REP = "mizan_van_rep_v1";
+  /* 📲 بناء 304 — بلاغ المالك 6/11 (بعد 303): «لسه في 1 و 2 وانا داخل بحساب مندوب
+     السيارة». الحقيقة أن تعرّف المندوب كله قائم على مطابقة **هوية الحساب** برحلة/سيارة
+     (rep_user/rep_user…). لو التعيين اتكتب باسم مختلف، أو سجل السيارات ما نزلش على
+     الجهاز، أو الحساب متعرّف غلط ⇒ vanIsRepUser ترجع false وتفتح كل مستودعات الشركة.
+     القرار: **مفيش مستودعات شركة قدام غير المالك**. لو الحساب مش مالك وما اتعرّفش
+     كسيارة، نعرض اختيار السيارة مرة واحدة (بانر واضح) ويثبت على الجهاز — لا 1 ولا 2. */
+  const LS_VAN_MAN = "mizan_van_man_v1";
+  function vanManualCarGet() {
+    try {
+      const raw = localStorage.getItem(LS_VAN_MAN);
+      if (!raw) return { car: "", skip: false };
+      const o = JSON.parse(raw);
+      if (!o) return { car: "", skip: false };
+      if (String(o.org || "") !== String(vanRepCacheOrg())) return { car: "", skip: false };
+      if (vanIdNorm(o.user) !== vanIdNorm(activityUser())) return { car: "", skip: false };
+      return { car: String(o.car || "").trim(), skip: o.skip === true };
+    } catch (e) { return { car: "", skip: false }; }
+  }
+  function vanManualCarSet(car, skip) {
+    try {
+      localStorage.setItem(LS_VAN_MAN, JSON.stringify({
+        org: vanRepCacheOrg(), user: vanIdNorm(activityUser()),
+        car: String(car || "").trim(), skip: skip === true
+      }));
+    } catch (e) { }
+  }
   var VREP_MEMO = null;
   /* تطبيع هوية واحد: نفس `normalizeAr` + توحيد المسافات (أحمد ≠ احمد قبل كده). */
   function vanIdNorm(v) {
@@ -17240,6 +17266,15 @@ id: nextVoucherId(),
     }
     vanRepTripCarsOfMe().forEach(add);
     if (out.length) { vanRepCacheSave(out.map((c) => c.name)); return out; }
+    /* 📲 بناء 304: مفيش تعيين مطابق ⇒ لو الحساب اختار سيارته بنفسه (اختيار مرة واحدة
+       من شاشة البيع) نعتبرها تعيينه. الاختيار ده لا يسبق تعيينًا حقيقيًا — بيشتغل
+       في الفراغ بس. */
+    const manCar = vanManualCarGet();
+    if (manCar.car && !manCar.skip) {
+      add({ id: 0, name: manCar.car, driver: "", phone: "", repUser: "", manual: true });
+      vanRepCacheSave(out.map((c) => c.name));
+      return out;
+    }
     // سجل السيارات موجود ومفيهوش تعيين ليا ومفيش رحلة بياها ⇒ أنا فعلاً مش مندوب
     if (haveCfg) return [];
     // السجل مش موجود (لسه بيتحمّل/فشل) ⇒ آخر تعيين محفوظ على الجهاز لنفس الشركة والحساب
@@ -18999,14 +19034,25 @@ id: nextVoucherId(),
   }
   function vanRepOpenTrip() {
     const rows = (carTrips || []).filter((t) => t && String(t.status || "") === "open" && vanTripIsMine(t));
-    if (!rows.length) return null;
-    const cars = vanRepCarNames().map(vanIdNorm);
-    const mine = rows.filter((t) => cars.indexOf(vanIdNorm(t.carName)) >= 0);
-    return (mine.length ? mine : rows).slice().sort((a, b) => {
+    const pickLatest = (arr) => (arr || []).slice().sort((a, b) => {
       const da = String(a.date || ""), db = String(b.date || "");
       if (da !== db) return db.localeCompare(da);
       return (Number(b.id) || 0) - (Number(a.id) || 0);
     })[0] || null;
+    if (!rows.length) {
+      /* 📲 بناء 304: الحساب مش متطابق بالهوية لكنه اختار سيارته بنفسه ⇒ رحلة السيارة
+         المفتوحة هي رحلته (نفس حمولة العربية اللي هيبيع منها). */
+      const manCar = vanManualCarGet();
+      const cn = (manCar.car && !manCar.skip) ? vanIdNorm(manCar.car) : "";
+      if (cn) {
+        const hit = (carTrips || []).filter((t) => t && String(t.status || "") === "open" && vanIdNorm(t.carName) === cn);
+        if (hit.length) return pickLatest(hit);
+      }
+      return null;
+    }
+    const cars = vanRepCarNames().map(vanIdNorm);
+    const mine = rows.filter((t) => cars.indexOf(vanIdNorm(t.carName)) >= 0);
+    return pickLatest(mine.length ? mine : rows);
   }
   function vanRepPosCar() {
     try {
@@ -19034,17 +19080,110 @@ id: nextVoucherId(),
     } catch (e) { }
     return "";
   }
+  /* 📲 بناء 304 — اختيار السيارة لمرة واحدة لما الحساب ما يتعرّفش كسيارة.
+     القاعدة: غير المالك لا يشوف مستودعات الشركة أبدًا؛ يا سيارة معروفة، يا اختيار.
+     الاختيار بيتخزن على الجهاز لنفس الشركة والحساب، وله «أنا مش مندوب» للكاشير. */
+  function posCarCandidates() {
+    const out = [], seen = {};
+    const add = (n) => {
+      const s = String(n == null ? "" : n).trim();
+      if (!s) return;
+      const k = vanIdNorm(s);
+      if (seen[k]) return;
+      seen[k] = 1;
+      out.push(s);
+    };
+    try { vanCarsAll().forEach((c) => add(c.name)); } catch (e) { }
+    try { (carTrips || []).forEach((t) => { if (t && String(t.status || "") === "open") add(t.carName); }); } catch (e) { }
+    return out;
+  }
+  function posShouldPickCar() {
+    try {
+      if (vanCanManage()) return false;
+      const man = vanManualCarGet();
+      if (man.skip || man.car) return false;
+      const vs = document.getElementById("viewSales");
+      if (!vs || vs.hidden) return false;               // الشاشة مش مفتوحة ⇒ ما نزعجش حد
+      return posCarCandidates().length > 0;
+    } catch (e) { return false; }
+  }
+  function posPickCarRemove() {
+    try { const d = document.getElementById("mizanPickCar"); if (d) d.remove(); } catch (e) { }
+  }
+  function posPickCarBar() {
+    try {
+      if (document.getElementById("mizanPickCar")) return;
+      const cars = posCarCandidates();
+      if (!cars.length) return;
+      const d = document.createElement("div");
+      d.id = "mizanPickCar";
+      d.setAttribute("dir", "rtl");
+      d.style.cssText = "position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,.6);display:flex;" +
+        "align-items:center;justify-content:center;padding:16px;font-family:inherit;";
+      d.innerHTML =
+        '<div style="background:#0a1a15;color:#fff;border:1px solid #2f7d61;border-radius:16px;' +
+        'max-width:430px;width:100%;padding:16px;box-shadow:0 20px 50px rgba(0,0,0,.65);font-size:13px;line-height:1.8">' +
+        '<div style="font-size:16px;font-weight:800;margin-bottom:6px">🚚 اختر سيارتك</div>' +
+        '<div style="color:#cfe9de;margin-bottom:10px">حسابك مش متعرّف عليه تلقائيًا كسيارة، ' +
+        'ومش هنعرض لك مستودعات الشركة. اختر سيارتك مرة واحدة وهتتثبت على الجهاز — ' +
+        'وبعدها الشاشة تعرض مخزونها هي بس.</div>' +
+        '<select id="mizanPickCarSel" style="width:100%;padding:11px;border-radius:10px;' +
+        'margin-bottom:10px;font-family:inherit;font-size:14px;background:#fff;color:#111">' +
+        cars.map((n) => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join("") +
+        '</select>' +
+        '<button type="button" id="mizanPickCarGo" style="width:100%;background:#1f9d6b;color:#fff;' +
+        'border:0;border-radius:10px;padding:11px;font-family:inherit;font-size:14px;font-weight:700;' +
+        'cursor:pointer;margin-bottom:8px">✔ تثبيت السيارة</button>' +
+        '<button type="button" id="mizanPickCarSkip" style="width:100%;background:#16302a;color:#d7f3e7;' +
+        'border:1px solid #2f7d61;border-radius:10px;padding:10px;font-family:inherit;font-size:13px;' +
+        'cursor:pointer">أنا مش مندوب — اعرض شاشة الشركة</button>' +
+        '</div>';
+      document.body.appendChild(d);
+      const go = document.getElementById("mizanPickCarGo");
+      const sk = document.getElementById("mizanPickCarSkip");
+      if (go) go.addEventListener("click", () => {
+        const sel = document.getElementById("mizanPickCarSel");
+        const car = sel ? String(sel.value || "").trim() : "";
+        if (!car) return;
+        vanManualCarSet(car, false);
+        try { vanRepInvalidate(); } catch (e) { }
+        posPickCarRemove();
+        try { renderSalesLookups(); } catch (e) { }
+        try { applyPosRepMode(); } catch (e) { }
+        toast("تم تثبيت «" + car + "» — شاشة البيع بقت على مخزون العربية دي بس.", "success");
+      });
+      if (sk) sk.addEventListener("click", () => {
+        vanManualCarSet("", true);
+        try { vanRepInvalidate(); } catch (e) { }
+        posPickCarRemove();
+        try { renderSalesLookups(); } catch (e) { }
+        try { applyPosRepMode(); } catch (e) { }
+      });
+    } catch (e) { }
+  }
   function applyPosRepMode() {
     try {
       const vanCtx = vanSellTripCtx;                    // 🧾 بناء 294: صاحب الشركة على رحلة مختارة
       const repCar = vanCtx ? String(vanCtx.car || "").trim() : posRepCarNow();
       if (!repCar) {
-        const b0 = $("#posVanBanner"); if (b0) { b0.hidden = true; b0.innerHTML = ""; }
+        /* 📲 بناء 304: غير المالك ومفيش سيارة متعرّفة ⇒ اختيار سيارة، مش مستودعات الشركة. */
+        if (posShouldPickCar()) {
+          const wp = $("#cmbPosWarehouse");
+          if (wp) {
+            wp.innerHTML = ""; wp.disabled = true;
+            const wrp = wp.closest(".fld-wh"); if (wrp) wrp.hidden = true;
+          }
+          posPickCarBar();
+          return;
+        }
+        posPickCarRemove();
+        const b0 = $("#posVanBanner"); if (b0) { b0.hidden = true; b0.innerHTML = ""; b0.dataset.mode = ""; }
         const w0 = $("#cmbPosWarehouse"); if (w0) w0.disabled = false;
         const wr0 = w0 ? w0.closest(".fld-wh") : null; if (wr0) wr0.hidden = false;
         const q0 = $("#btnQuickAddProduct"); if (q0) q0.hidden = false;
         return;
       }
+      posPickCarRemove();
       const car = repCar;
       const wh = $("#cmbPosWarehouse");
       if (wh) {
