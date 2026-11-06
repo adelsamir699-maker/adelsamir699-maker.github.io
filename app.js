@@ -10045,21 +10045,70 @@
     if (!el || i < 0) return false;
     const b = el.querySelectorAll("[data-prod-pick]")[i];
     if (!b) return false;
-    productSuggestPick(kind, b.getAttribute("data-prod-pick"));
+    productSuggestPick(kind, b.getAttribute("data-prod-pick"), false);
     return true;
   }
-  function productSuggestPick(kind, id) {
+  /* ══════════════════════════════════════════════════════════════════════════
+     📱 بناء 299 — الموبايل: «اختيار الصنف» لازم ينزّل السطر
+     بلاغ المالك الحيّ 06/11 بحرفه: «الفاتوره بعملها على الموبايل حالا و بضغط حفظ الفاتورة
+     و الترحيل بتظهر لى رساله خطا يرجى اضافة اصناف».
+     الجذر المقاس (رحلة كروم 390×844 باللمس الحقيقي على شجرة 297 الحيّة):
+       · لمس الصنف في القائمة المنسدلة كان بيملي خانة الاسم **وبس** — `posItems` يفضل فاضي،
+         مافيش سطرين على الشاشة، **ومافيش أي رسالة** ⇒ المندوب يشوف اسمه مكتوب فوق، يمسّ
+         «حفظ الفاتورة والترحيل» ⇒ «يرجى إضافة أصناف إلى الفاتورة أولاً» (21✔ من نفس الرحلة).
+       · المسار الوحيد التاني لإنزال سطر = `keydown Enter` (وليسّلّم إن ➕ بيشتغل باللمس:
+         مسه ➕ ⇒ سطر ⇒ الحفظ نزل فاتورة برقم وقيود).
+       · والليبل نفسه «🔍 اسم الصنف ثم Enter» بيعلّم الموبايل على مفتاح بيختلف: كيبورد
+         أندرويد اللين (GBoard / Samsung / SwiftKey) ما بيرجّعش `keydown Enter` لزرار
+         «إدخال/Go» في `input` مش جوه `<form>` — ومقاس من البنية: مستمعات خانة البيع
+         (input/keydown/focus/click/paste) بس، والخانة بره أي `<form>`، ومافيش `enterkeyhint`.
+     القرار: اللمسة من جهاز لمس = **نفس `posAddItem`/`ppAddItem` اللي زرار ➕ بناديه**
+     (بما فيها قرار السعر والمخزون وحمولة العربية ورسائلها — مافيش مسار حسابي تاني).
+     الفأرة على المكتب: سلوك 297 بالحرف (تعبئة الاسم + فوكس) — شاشات اللاب ما بتتلمسش.
+     كشف اللمس بنبضة `touchstart` مش بـ `pointerType` ولا بـ userAgent: الميميكري بقى
+     غلطته في بناء 212 (`scanDropSel`)، والاعتماد على سترب المستخدم كداب على التابلت.
+     ══════════════════════════════════════════════════════════════════════════ */
+  let lastTouchPulse = 0;
+  const TOUCH_UI = (() => {
+    try { return window.matchMedia("(hover: none) and (pointer: coarse)").matches === true; } catch (e) { return false; }
+  })();
+  function suggestByTouch() {
+    try { return TOUCH_UI || (Date.now() - lastTouchPulse) < 900; } catch (e) { return false; }
+  }
+  /* 📱 بناء 299: على أجهزة اللمس «ثم Enter» تعليمات ما بتوصلش لنتيجة — كيبورد أندرويد اللين
+     ما بيرجّعش keydown Enter لزرار «إدخال/Go» في input مش جوه <form> (مقاس 06/11).
+     بنبدّل نص الليبل على الشاشة بس: ملف index.html (ولاب/طباعة) ما اتلمسش خالص. */
+  function posTouchEntryLabels() {
+    try {
+      if (!TOUCH_UI) return;
+      ["txtPosSearch", "txtPPSearch"].forEach((fid) => {
+        const l = document.querySelector('label[for="' + fid + '"]');
+        if (l && l.textContent.indexOf("Enter") >= 0) l.textContent = "🔍 اسم الصنف ثم ➕ إضافة:";
+      });
+    } catch (e) { }
+  }
+  function productSuggestPick(kind, id, byTouch) {
     const p = products.find((x) => Number(x.id) === Number(id));
     const field = $("#" + PROD_DROP_FIELD[kind]);
     if (!p || !field) return;
     field.value = p.nameAr || "";
     if (kind === "sale") posOnSearch(); else ppOnSearch();
+    if (byTouch) {
+      /* النزول للسطر من **نفس** بوابة ➕ — بلا أي حساب موازي ومن غير ما نفتح keyboard تاني. */
+      try {
+        if (field.blur) field.blur();
+        if (kind === "sale") { posAddSource = "search"; posAddItem(); } else { ppAddItem(); }
+        productSuggestHide(kind);
+        return;
+      } catch (e) { /* فشل غير متوقع ⇒ رجوع لسلوك 297 بالحرف (تعبئة + فوكس) */ }
+    }
     field.focus();
     productSuggestHide(kind);
   }
   function productSuggestBind() {
     if (document.__prodDropBound) return;
     document.__prodDropBound = true;
+    try { document.addEventListener("touchstart", () => { lastTouchPulse = Date.now(); }, { passive: true }); } catch (e) { }
     document.addEventListener("mousedown", (ev) => {
       const b = ev.target && ev.target.closest ? ev.target.closest("[data-prod-pick]") : null;
       if (!b) return;
@@ -10069,7 +10118,7 @@
          ⇒ المقارنة القديمة كانت دايمًا false، فالكليك في فاتورة المبيعات كان بياخد
          فرع «purchase» ويكتب اسم الصنف في خانة المشتريات وتسيب خانة البيع فاضية. */
       const kind = (host && host.id === "scanDrop-" + PROD_DROP_FIELD.sale) ? "sale" : "purchase";
-      productSuggestPick(kind, b.getAttribute("data-prod-pick"));
+      productSuggestPick(kind, b.getAttribute("data-prod-pick"), suggestByTouch());
     });
     document.addEventListener("click", (ev) => {
       if (ev.target && ev.target.closest && ev.target.closest(".prod-drop")) return;
@@ -10160,6 +10209,7 @@
     posUpdateBadge(null);
     renderPosItems();
     posRecalc();
+    try { posTouchEntryLabels(); } catch (e) { }
     try { applyPosRepMode(); } catch (e) { }
   }
 
@@ -11234,7 +11284,9 @@
       if (vanInVanSaleMode()) { savePosInvoiceAsVan(); return; }
     } catch (e) { }
     if (posItems.length === 0) {
-      toast("يرجى إضافة أصناف إلى الفاتورة أولاً.", "warning");
+      /* 📱 بناء 299: الجملة القديمة بحرفها في أول الرسالة (مافيش أي كاشف بيتكسر)،
+         + الطريق الواضح بدل ما المندوب يلفّ على الموبايل ويحس إن الحفظ «بيغلّط». */
+      toast("يرجى إضافة أصناف إلى الفاتورة أولاً." + (TOUCH_UI ? " اختار الصنف من القائمة أو دوس «إضافة ➕»." : ""), "warning");
       return;
     }
     // 🧾 بناء 176: «بره الشيفت ممنوع البيع لغير المالك» — العضو لازم يكون فاتح وردية
@@ -11727,6 +11779,7 @@
     ppUpdateBadge(null);
     renderPPItems();
     ppRecalc();
+    try { posTouchEntryLabels(); } catch (e) { }
   }
 
   function ppPaymentVisibility() {
@@ -11991,7 +12044,9 @@
 
   function savePurchaseInvoice() {
     if (ppItems.length === 0) {
-      toast("يرجى إضافة أصناف إلى الفاتورة أولاً.", "warning");
+      /* 📱 بناء 299: نفس جذر بلاغ الموبايل في فاتورة **المشتريات** كمان (لمس الصنف كان بيملي
+         الاسم وبس) ⇒ نفس التلميح على أجهزة اللمس فقط، والجملة الأصلية فضلت بادئة بلا أي تغيير. */
+      toast("يرجى إضافة أصناف إلى الفاتورة أولاً." + (TOUCH_UI ? " اختار الصنف من القائمة أو دوس «إضافة ➕»." : ""), "warning");
       return;
     }
     let payment = "نقداً"; // 🆕 199: بتُحسب من سطور السداد بعد `t` (مافيش قائمة «الدفع» خلاص)
@@ -18750,7 +18805,11 @@ id: nextVoucherId(),
   }
   /* حفظ فاتورة البيع من شاشة المندوب = **فاتورة سيارة** (نفس محاسبة بيع السيارة بالحرف). */
   function savePosInvoiceAsVan() {
-    if (!posItems.length) { toast("يرجى إضافة أصناف إلى الفاتورة أولاً.", "warning"); return; }
+    /* 📱 بناء 299: دي شاشة المندوب على الموبايل — نفس الجملة + الطريق الواضح. */
+    if (!posItems.length) {
+      toast("يرجى إضافة أصناف إلى الفاتورة أولاً." + (TOUCH_UI ? " اختار الصنف من القائمة أو دوس «إضافة ➕»." : ""), "warning");
+      return;
+    }
     /* 🧾 بناء 294: الرحلة = رحلة المندوب المفتوحة (274) أو الرحلة اللي المالك دوس
        «بيع» عليها من جدول الرحلات (`vanSellTripCtx`) — الاتنين بينزلوا نفس فاتورة السيارة. */
     const trip = vanSaleModeTrip();
