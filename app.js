@@ -10094,13 +10094,15 @@
     field.value = p.nameAr || "";
     if (kind === "sale") posOnSearch(); else ppOnSearch();
     if (byTouch) {
-      /* النزول للسطر من **نفس** بوابة ➕ — بلا أي حساب موازي ومن غير ما نفتح keyboard تاني. */
-      try {
-        if (field.blur) field.blur();
-        if (kind === "sale") { posAddSource = "search"; posAddItem(); } else { ppAddItem(); }
-        productSuggestHide(kind);
-        return;
-      } catch (e) { /* فشل غير متوقع ⇒ رجوع لسلوك 297 بالحرف (تعبئة + فوكس) */ }
+      /* 🧾 بناء 300 — تراجع مقصود عن قرار 299 (بلاغ المالك الحيّ 06/11 بحرفه:
+         «الاصناف اصبحت تنزل الفاتوره من غير ما اضغط على زرار اضافه فى الموبايل»).
+         لمس الصنف في القائمة = **تعبئة الاسم وبس** (سلوك 297 بالحرف): المندوب بيراجع
+         ويقلّب في الأصناف، والقرار المالي لازم يكون بدوس «➕ إضافة» أو Enter —
+         ما ينفعش لمسة مسح/مراجعة تنزّل سطر في فاتورة.
+         بلاغ 299 الأصلي (الفاتورة بتفضل فاضية رغم إنه اختار الصنف) مقفول من الجهة التانية:
+         `posPendingProduct`/`ppPendingProduct` — «حفظ الفاتورة والترحيل» بيفتّش على الصنف
+         اللي في الخانة وينزّله من **نفس بوابة ➕** قبل فحص الفاتورة الفاضية. */
+      try { if (field.blur) field.blur(); } catch (e) { }
     }
     field.focus();
     productSuggestHide(kind);
@@ -10401,6 +10403,71 @@
     if (posAddSource === "code") $("#txtPosCode").focus();
     else $("#txtPosSearch").focus();
   }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     🧾 بناء 300 — «الصنف اللي في الخانة ما يضيعش في الحفظ» (بلاغ المالك 06/11).
+     اللمسة ما بتنزّلش سطر (300)، في مقابلها الحفظ نفسه بيشوف الصنف المكتوب/المختار
+     في خانة الاسم أو الكود وينزّله من **نفس بوابة ➕** (`posAddItem` / `ppAddItem` —
+     نفس قرار السعر والمخزون وحمولة العربية ورسائلها بالضبط، مافيش مسار حسابي تاني).
+     ثلاث حالات، بلا أي صمت:
+       · فاتورة فاضية + صنف في الخانة  ⇒ ينزل السطر والحفظ يكمّل (ده بالضبط بلاغ 299).
+       · فاتورة فيها سطور + صنف في الخانة ⇒ الحفظ **يقف** برسالة واضحة «دوس ➕ إضافة أول»
+         (ممنوع ينزل سطر من غير دوسه، وممنوع كمان يرحّل فاتورة ناقصة وهو ساكت).
+       · مافيش صنف معروف في الخانة ⇒ الحفظ زي ما هو بالظبط (صفر تغيير عن 299).
+     ══════════════════════════════════════════════════════════════════════════ */
+  function posPendingProduct() {
+    try {
+      const q = String($("#txtPosSearch").value || "").trim();
+      if (q) return findProductFlexible(q) || null;
+      const c = String($("#txtPosCode").value || "").trim();
+      return c ? (findProductFlexible(c) || null) : null;
+    } catch (e) { return null; }
+  }
+  function posSavePendingEntry() {
+    try {
+      if (!posPendingProduct()) return false;
+      const sig = posItems.reduce((s, it) => s + Number(it.qty || 0), 0);
+      posAddSource = "search";
+      posAddItem();
+      return posItems.reduce((s, it) => s + Number(it.qty || 0), 0) > sig;
+    } catch (e) { return false; }
+  }
+  /* ⇒ "added" نزل · "blocked" رفضته بوابة ➕ (رصيد/حمولة/سعر — رسالتها ظهرت) ·
+        "pending" فيه صنف لسه ما نزلش والفاتورة فيها سطور · "none" مافيش حاجة معلّقة. */
+  function posPendingOnSave() {
+    try {
+      const prod = posPendingProduct();
+      if (!prod) return { state: "none", prod: null };
+      if (posItems.length === 0) return { state: posSavePendingEntry() ? "added" : "blocked", prod: prod };
+      return { state: "pending", prod: prod };
+    } catch (e) { return { state: "none", prod: null }; }
+  }
+  function posPendingToast(prod) {
+    toast("«" + (prod && prod.nameAr ? prod.nameAr : "الصنف") + "» مكتوب في خانة الصنف ولم يُضَف إلى الفاتورة." +
+      (TOUCH_UI ? " دوس «➕ إضافة» أول، أو امسح الخانة لو مش مطلوب." : " دوس «➕ إضافة صنف» أول، أو امسح الخانة لو مش مطلوب."), "warning");
+  }
+  function ppPendingProduct() {
+    try {
+      const q = String($("#txtPPSearch").value || "").trim();
+      if (q) return findProductFlexible(q) || null;
+      const c = String($("#txtPPCode").value || "").trim();
+      return c ? (findProductFlexible(c) || null) : null;
+    } catch (e) { return null; }
+  }
+  function ppPendingOnSave() {
+    try {
+      const prod = ppPendingProduct();
+      if (!prod) return { state: "none", prod: null };
+      if (ppItems.length === 0) {
+        const sig = ppItems.reduce((s, it) => s + Number(it.qty || 0), 0);
+        ppAddItem();
+        return { state: ppItems.reduce((s, it) => s + Number(it.qty || 0), 0) > sig ? "added" : "blocked", prod: prod };
+      }
+      return { state: "pending", prod: prod };
+    } catch (e) { return { state: "none", prod: null }; }
+  }
+  const ppPendingToast = (prod) => toast("«" + (prod && prod.nameAr ? prod.nameAr : "الصنف") + "» مكتوب في خانة الصنف ولم يُضَف إلى الفاتورة." +
+    (TOUCH_UI ? " دوس «➕ إضافة» أول، أو امسح الخانة لو مش مطلوب." : " دوس «➕ إضافة صنف» أول، أو امسح الخانة لو مش مطلوب."), "warning");
 
   /* نافذة «لا يوجد رصيد… هل تريد إضافة رصيد له؟» — تزوّد المخزن بالكمية المكتوبة وتكمّل السطر. */
   let posRestockCtx = null;
@@ -11283,10 +11350,17 @@
     try {
       if (vanInVanSaleMode()) { savePosInvoiceAsVan(); return; }
     } catch (e) { }
+    /* 🧾 بناء 300 (بلاغ 06/11): الصنف اللي في الخانة ينزل من بوابة ➕ قبل فحص الفاضية،
+       ولو الفاتورة فيها سطور يقف برسالة واضحة بدل ما يرحّل ناقصة ساكتة. */
+    try {
+      const pd = posPendingOnSave();
+      if (pd.state === "blocked") return;
+      if (pd.state === "pending") { posPendingToast(pd.prod); return; }
+    } catch (e) { }
     if (posItems.length === 0) {
       /* 📱 بناء 299: الجملة القديمة بحرفها في أول الرسالة (مافيش أي كاشف بيتكسر)،
          + الطريق الواضح بدل ما المندوب يلفّ على الموبايل ويحس إن الحفظ «بيغلّط». */
-      toast("يرجى إضافة أصناف إلى الفاتورة أولاً." + (TOUCH_UI ? " اختار الصنف من القائمة أو دوس «إضافة ➕»." : ""), "warning");
+      toast("يرجى إضافة أصناف إلى الفاتورة أولاً." + (TOUCH_UI ? " اختار الصنف من القائمة ودوس «➕ إضافة»." : ""), "warning");
       return;
     }
     // 🧾 بناء 176: «بره الشيفت ممنوع البيع لغير المالك» — العضو لازم يكون فاتح وردية
@@ -12043,10 +12117,16 @@
   }
 
   function savePurchaseInvoice() {
+    /* 🧾 بناء 300: نفس منطق البيع بالظبط على شاشة المشتريات (مصدر قرار واحد). */
+    try {
+      const pd = ppPendingOnSave();
+      if (pd.state === "blocked") return;
+      if (pd.state === "pending") { ppPendingToast(pd.prod); return; }
+    } catch (e) { }
     if (ppItems.length === 0) {
       /* 📱 بناء 299: نفس جذر بلاغ الموبايل في فاتورة **المشتريات** كمان (لمس الصنف كان بيملي
          الاسم وبس) ⇒ نفس التلميح على أجهزة اللمس فقط، والجملة الأصلية فضلت بادئة بلا أي تغيير. */
-      toast("يرجى إضافة أصناف إلى الفاتورة أولاً." + (TOUCH_UI ? " اختار الصنف من القائمة أو دوس «إضافة ➕»." : ""), "warning");
+      toast("يرجى إضافة أصناف إلى الفاتورة أولاً." + (TOUCH_UI ? " اختار الصنف من القائمة ودوس «➕ إضافة»." : ""), "warning");
       return;
     }
     let payment = "نقداً"; // 🆕 199: بتُحسب من سطور السداد بعد `t` (مافيش قائمة «الدفع» خلاص)
@@ -18805,9 +18885,16 @@ id: nextVoucherId(),
   }
   /* حفظ فاتورة البيع من شاشة المندوب = **فاتورة سيارة** (نفس محاسبة بيع السيارة بالحرف). */
   function savePosInvoiceAsVan() {
-    /* 📱 بناء 299: دي شاشة المندوب على الموبايل — نفس الجملة + الطريق الواضح. */
+    /* 🧾 بناء 300: شاشة المندوب على الموبايل — الصنف اللي في الخانة ينزل قبل فحص الفاضية،
+       وممنوع ترحيل فاتورة فيها سطور وفيها صنف معلّق ساكتة. */
+    try {
+      const pd = posPendingOnSave();
+      if (pd.state === "blocked") return;
+      if (pd.state === "pending") { posPendingToast(pd.prod); return; }
+    } catch (e) { }
+    /* 📱 بناء 299: نفس الجملة + الطريق الواضح. */
     if (!posItems.length) {
-      toast("يرجى إضافة أصناف إلى الفاتورة أولاً." + (TOUCH_UI ? " اختار الصنف من القائمة أو دوس «إضافة ➕»." : ""), "warning");
+      toast("يرجى إضافة أصناف إلى الفاتورة أولاً." + (TOUCH_UI ? " اختار الصنف من القائمة ودوس «➕ إضافة»." : ""), "warning");
       return;
     }
     /* 🧾 بناء 294: الرحلة = رحلة المندوب المفتوحة (274) أو الرحلة اللي المالك دوس
