@@ -970,6 +970,31 @@
     }
   }
 
+  /* 🚚 بناء 306 — بلاغ المالك 6/11: «النقدى اللى جاى من مندوب السيارات دخل على المحافظ».
+     هل الفاتورة «فاتورة سيارة» (بيع مندوب)؟ العلامة الدائمة هي وسم `[[VAN|...]]` في
+     الملاحظات (بينزل ويرجع من السحابة — بصمة بناء 273)، و`isVan`/`vanRepAccountId` موجودين
+     على الجهاز اللي حفظها. */
+  function isVanInvoice(inv) {
+    if (!inv) return false;
+    if (inv.isVan || inv.vanRepAccountId) return true;
+    return /\[\[VAN\|/.test(String(inv.notes || ""));
+  }
+  /* 💵 بناء 306 — خزينة سطر السداد، أو `null` لو الفلوس **مش في أي خزينة**.
+     الآجل على حساب الطرف، والشيك على حساب الشيكات (1.1.7)، ونقدي فاتورة السيارة على
+     **ذمة المندوب** — القاعدة دي هي عين قرار المالك (بناء 271).
+     السطر القديم اللي مالوش `treasuryId` بيرجع لخزينة الفاتورة (توافق خلفي)، إلا نقد
+     فاتورة السيارة: عمره ما يدخل خزينة، حتى لو الفاتورة القديمة اتحفظ عليها `treasuryId`
+     لمحفظة (ده بالظبط مسار التسرّب اللي اتقاس). */
+  function payLineTreasuryId(inv, p) {
+    if (!p) return null;
+    const mode = posPayMode(p.method);
+    if (mode.isAjal || mode.isCheck) return null;
+    if (isVanInvoice(inv) && mode.isCash) return null;
+    if (p.treasuryId != null && p.treasuryId !== "") return Number(p.treasuryId) || null;
+    if (inv && inv.treasuryId != null && inv.treasuryId !== "") return Number(inv.treasuryId) || null;
+    return null;
+  }
+
   // 🆕 بناء 199: مبلغ سطور السداد اللي دخلت خزينة `tid` (بلا «آجل»/«شيك»).
   // ترجّع `null` لو الفاتورة مالهاش سطور سداد (توافق خلفي: القاعدة القديمة).
   function recalcLinesIn(inv, tid) {
@@ -980,12 +1005,13 @@
          النص الإنجليزي لوحده. السطور المحفوظة إنجليزي (ajal/check)، لكن الفواتير
          القديمة/المستوردة ممكن تكون عربي («آجل»/«شيك») ⇒ المقارنة القديمة كانت
          بتعتبر «آجل» العربي مدفوعًا نقدًا فتحرّك الخزينة بالغلط. */
-      const mode = posPayMode(p && p.method);
-      if (mode.isAjal || mode.isCheck) return;
       const amt = Number((p && p.amount) || 0);
       if (!(amt > 0)) return;
-      if (p.treasuryId != null && Number(p.treasuryId) === Number(tid)) sum += amt;
-      else if (p.treasuryId == null && Number(inv.treasuryId) === Number(tid)) sum += amt;
+      /* 🧾 بناء 306: سطر النقد في فاتورة السيارة `treasuryId = null` بالتصميم، وكان
+         السطر ده بيتحسب على `inv.treasuryId` — واللي بيبقى **أول خزينة غير نقدية**
+         (محفظة/بنك) ⇒ النقد يتضاف لرصيد المحفظة في كل إعادة حساب. دلوقتي التوزيع
+         كله من مصدر واحد: `payLineTreasuryId`. */
+      if (payLineTreasuryId(inv, p) === Number(tid)) sum += amt;
     });
     return Math.round(sum * 100) / 100;
   }
@@ -13955,9 +13981,12 @@
         if (mode.isAjal || mode.isCheck) return;
         const a = r2n(p.amount);
         if (!(a > 0.0001)) return;
-        let tr2 = (p.treasuryId != null && p.treasuryId !== "")
-          ? treasury.find((x) => Number(x.id) === Number(p.treasuryId)) : null;
-        if (!tr2) tr2 = treasury.find((x) => Number(x.id) === Number(inv2.treasuryId)) || null;
+        /* 🚚 بناء 306: نقد فاتورة السيارة على ذمة المندوب — مش في أي خزينة، فالحذف
+           ما يسحبش من محفظة/بنك (قيد الفاتورة بيعكس ذمة المندوب لوحده). */
+        if (isVanInvoice(inv2) && mode.isCash) return;
+        let tr2 = null;
+        const payTid = payLineTreasuryId(inv2, p);
+        if (payTid != null) tr2 = treasury.find((x) => Number(x.id) === Number(payTid)) || null;
         if (!tr2) {
           const want = mode.isBank ? "bank" : mode.isWallet ? "wallet" : mode.isInsta ? "instapay" : "cash";
           tr2 = treasury.find((x) => x.type === want) || treasury.find((x) => x.type === "cash") || treasury[0] || null;
@@ -13984,7 +14013,8 @@
         .reduce((m, c) => m + (Number(c.amount) || 0), 0));
       const cashPaid = r2n(Math.max(0, gonePaid - linkedCheckPaid));
       if (cashPaid > 0.0001) {
-        if (inv.treasuryId != null && inv.treasuryId !== "") {
+        /* 🚚 بناء 306: نقد فاتورة السيارة عمره ما دخل خزينة — يتراجع في قيد المندوب فقط. */
+        if (!isVanInvoice(inv) && inv.treasuryId != null && inv.treasuryId !== "") {
           ptr = treasury.find((x) => Number(x.id) === Number(inv.treasuryId)) || null;
         }
         if (!ptr) {
@@ -16323,15 +16353,28 @@ id: nextVoucherId(),
   function treasuryAmounts() {
     const map = {};
     treasury.forEach((t) => (map[t.id] = { in: 0, out: 0 }));
-    sales.filter((s) => s.treasuryId && s.paymentMethod !== "آجل").forEach((s) => {
-      const k = Number(s.treasuryId);
-      if (map[k]) map[k].in += Number(s.grandTotal || 0);
-      else if (map[s.treasuryId]) map[s.treasuryId].in += Number(s.grandTotal || 0);
+    const bump = (id, side, amt) => {
+      const k = Number(id);
+      const target = map[k] || map[String(id)];
+      if (target) target[side] += Number(amt) || 0;
+    };
+    /* 🧾 بناء 306: لو الفاتورة فيها سطور سداد ⇒ التوزيع من السطور نفسها (نفس مصدر
+       `recalculateTreasuryBalances`) — عشان نقد سيارة المندوب ما يظهرش على المحفظة. */
+    sales.forEach((s) => {
+      if (Array.isArray(s.payments) && s.payments.length) {
+        s.payments.forEach((p) => { const tid = payLineTreasuryId(s, p); if (tid != null) bump(tid, "in", p && p.amount); });
+        return;
+      }
+      if (!s.treasuryId || String(s.paymentMethod || "") === "آجل") return;
+      bump(s.treasuryId, "in", s.grandTotal);
     });
-    purchases.filter((p) => p.treasuryId && p.paymentMethod !== "آجل").forEach((p) => {
-      const k = Number(p.treasuryId);
-      if (map[k]) map[k].out += Number(p.grandTotal || 0);
-      else if (map[p.treasuryId]) map[p.treasuryId].out += Number(p.grandTotal || 0);
+    purchases.forEach((p) => {
+      if (Array.isArray(p.payments) && p.payments.length) {
+        p.payments.forEach((line) => { const tid = payLineTreasuryId(p, line); if (tid != null) bump(tid, "out", line && line.amount); });
+        return;
+      }
+      if (!p.treasuryId || String(p.paymentMethod || "") === "آجل") return;
+      bump(p.treasuryId, "out", p.grandTotal);
     });
     vouchers.forEach((v) => {
       const k = Number(v.treasuryId);
@@ -19384,6 +19427,7 @@ id: nextVoucherId(),
     }));
     if (jrnBlocked("فاتورة السيارة", invoiceJrnPlan("sale", invoice, null))) return;
     // 🏦 خزائن البنك/المحفظة/إنستا فقط — النقدي مايدخلش أي خزينة (على ذمة المندوب)
+    let vanTreasuryTouched = false;
     resolved.forEach((r, i) => {
       if (r.md.isCash || r.md.isAjal) return;
       if (r.md.isCheck) {
@@ -19400,10 +19444,15 @@ id: nextVoucherId(),
       if (!tr) return;
       tr.balance = round2((Number(tr.balance) || 0) + round2(r.line.amount));
       if (invoice.payments && invoice.payments[i]) invoice.payments[i].treasuryId = tr.id;
-      if (!invoice.treasuryId) invoice.treasuryId = tr.id;
+      /* 🧾 بناء 306: ممنوع `invoice.treasuryId` يستولي على أول خزينة غير نقدية.
+         الفاتورة دي نقدها على ذمة المندوب، والبنك/المحفظة معروفين من سطر السداد نفسه
+         (`payments[].treasuryId`). لما كنا بنحط خزينة المحفظة على الفاتورة، كل إعادة
+         حساب كانت بتضيف **سطر النقد** (اللي `treasuryId = null`) لرصيد المحفظة —
+         بالظبط بلاغ المالك: «النقدى اللى جاى من مندوب السيارات دخل على المحافظ». */
+      vanTreasuryTouched = true;
       try { syncTreasuryItemToSett(tr); } catch (e) { }
     });
-    if (invoice.treasuryId) saveTreasury();
+    if (vanTreasuryTouched) saveTreasury();
     // الآجل يزيد رصيد العميل (نفس الفاتورة العادية)
     if (t.due > 0) {
       cust.currentBalance = Math.round(((Number(cust.currentBalance) || 0) + t.due) * 100) / 100;
@@ -20296,8 +20345,25 @@ id: nextVoucherId(),
   function renderTreMoves() {
     trMovesBindOnce();
     const moves = [];
-    sales.filter((s) => s.treasuryId && s.paymentMethod !== "آجل").forEach((s) => moves.push({ date: s.invoiceDate || s.date || todayISO(), name: (treasury.find((t) => Number(t.id) === Number(s.treasuryId)) || {}).name || "-", desc: "فاتورة مبيعات " + (s.invoiceNumber || s.invoiceNo), in: s.grandTotal, out: 0 }));
-    purchases.filter((p) => p.treasuryId && p.paymentMethod !== "آجل").forEach((p) => moves.push({ date: p.invoiceDate || p.date || todayISO(), name: (treasury.find((t) => Number(t.id) === Number(p.treasuryId)) || {}).name || "-", desc: "فاتورة مشتريات " + (p.invoiceNumber || p.invoiceNo), in: 0, out: p.grandTotal }));
+    /* 🧾 بناء 306: حركات الفواتير من سطور السداد نفسها — نقد سيارة المندوب مش خزينة،
+       وسطر المحفظة يظهر بمبلغه هو مش بإجمالي الفاتورة. */
+    const pushInvMoves = (inv, side) => {
+      const date = inv.invoiceDate || inv.date || todayISO();
+      const desc = "فاتورة " + (side === "in" ? "مبيعات " : "مشتريات ") + (inv.invoiceNumber || inv.invoiceNo);
+      const rowOf = (id, amt) => ({ date: date, name: (treasury.find((t) => Number(t.id) === Number(id)) || {}).name || "-", desc: desc, in: side === "in" ? amt : 0, out: side === "out" ? amt : 0 });
+      if (Array.isArray(inv.payments) && inv.payments.length) {
+        inv.payments.forEach((p) => {
+          const tid = payLineTreasuryId(inv, p);
+          const amt = round2(Number((p && p.amount) || 0));
+          if (tid != null && amt > 0) moves.push(rowOf(tid, amt));
+        });
+        return;
+      }
+      if (!inv.treasuryId || String(inv.paymentMethod || "") === "آجل") return;
+      moves.push(rowOf(inv.treasuryId, Number(inv.grandTotal) || 0));
+    };
+    sales.forEach((s) => pushInvMoves(s, "in"));
+    purchases.forEach((p) => pushInvMoves(p, "out"));
     vouchers.forEach((v) => moves.push({ date: v.date, name: (treasury.find((t) => Number(t.id) === Number(v.treasuryId)) || {}).name || "-", desc: v.desc || (v.type === "in" ? "إيراد (سند قبض)" : "مصروف (سند صرف)"), in: (v.type === "in" || v.kind === "in") ? v.amount : 0, out: (v.type === "out" || v.kind === "out") ? v.amount : 0, voucherId: Number(v.id) || 0, transfer: trMoveIsTransfer(v) }));
     moves.sort((a, b) => new Date(b.date) - new Date(a.date));
     const tbody = $("#dgvTreMoves tbody");
@@ -20944,14 +21010,21 @@ id: nextVoucherId(),
     };
     const trOfType = (type) => treasury.find((x) => x.type === type) || treasury.find((x) => x.type === "cash") || treasury[0] || null;
     const pm = String(inv.paymentMethod || "");
+    /* 🚚 بناء 306: فاتورة سيارة قديمة بلا سطور سداد — القبض على ذمة المندوب، مش خزينة. */
+    if (isVanInvoice(inv) && !(Array.isArray(inv.payments) && inv.payments.length)) return plan;
     if (Array.isArray(inv.payments) && inv.payments.length) {
       inv.payments.forEach((p) => {
         const mode = posPayMode(p && p.method); // 🔧 بناء 255 (بند #7): عربي + إنجليزي
         if (mode.isAjal || mode.isCheck) return;
         const a = round2(p.amount);
         if (!(a > 0)) return;
-        let tr = (p.treasuryId != null && p.treasuryId !== "") ? treasury.find((x) => Number(x.id) === Number(p.treasuryId)) : null;
-        if (!tr) tr = treasury.find((x) => Number(x.id) === Number(inv.treasuryId)) || null;
+        /* 🚚 بناء 306: نقد فاتورة السيارة على ذمة المندوب — الحذف ما يلمسش أي خزينة
+           (قيد الفاتورة بيرجّع ذمة المندوب في `removeInvoiceJournal`). قبل كده كان
+           بيرجع لخزينة الفاتورة (`inv.treasuryId`) واللي بتبقى محفظة ⇒ سحب من المحفظة. */
+        if (isVanInvoice(inv) && mode.isCash) return;
+        let tr = null;
+        const payTid = payLineTreasuryId(inv, p);
+        if (payTid != null) tr = treasury.find((x) => Number(x.id) === Number(payTid)) || null;
         if (!tr) tr = trOfType(mode.isBank ? "bank" : mode.isWallet ? "wallet" : mode.isInsta ? "instapay" : "cash");
         add(tr, a);
       });
@@ -24834,8 +24907,36 @@ id: nextVoucherId(),
        قبل كده كان بيتصفّر في السطر ويفضل محسوبًا في `t.balance` ⇒ السطر الأخير يخالف الرصيد. */
     const treOpen = Number(t.openingBalance) || 0;
     moves.push({ date: "بداية", desc: "الرصيد الافتتاحي", in: treOpen > 0 ? treOpen : 0, out: treOpen < 0 ? -treOpen : 0 });
-    sales.filter((s) => Number(s.treasuryId) === Number(tid) && s.paymentMethod !== "آجل").forEach((s) => moves.push({ date: s.invoiceDate || s.date || "—", desc: "فاتورة مبيعات " + (s.invoiceNumber || s.invoiceNo), in: s.grandTotal, out: 0 }));
-    purchases.filter((p) => Number(p.treasuryId) === Number(tid) && p.paymentMethod !== "آجل").forEach((p) => moves.push({ date: p.invoiceDate || p.date || "—", desc: "فاتورة مشتريات " + (p.invoiceNumber || p.invoiceNo), in: 0, out: p.grandTotal }));
+    /* 🧾 بناء 306: نفس مصدر الرصيد بالحرف — كل سطر سداد على خزينته، ونقد سيارة
+       المندوب ما يظهرش على أي خزينة. الفواتير القديمة بلا سطور سداد تفضل على سلوكها. */
+    sales.forEach((s) => {
+      const date = s.invoiceDate || s.date || "—";
+      const desc = "فاتورة مبيعات " + (s.invoiceNumber || s.invoiceNo);
+      if (Array.isArray(s.payments) && s.payments.length) {
+        s.payments.forEach((p) => {
+          if (payLineTreasuryId(s, p) !== Number(tid)) return;
+          const amt = round2(Number((p && p.amount) || 0));
+          if (amt > 0) moves.push({ date: date, desc: desc, in: amt, out: 0 });
+        });
+        return;
+      }
+      if (Number(s.treasuryId) !== Number(tid) || s.paymentMethod === "آجل") return;
+      moves.push({ date: date, desc: desc, in: s.grandTotal, out: 0 });
+    });
+    purchases.forEach((p) => {
+      const date = p.invoiceDate || p.date || "—";
+      const desc = "فاتورة مشتريات " + (p.invoiceNumber || p.invoiceNo);
+      if (Array.isArray(p.payments) && p.payments.length) {
+        p.payments.forEach((line) => {
+          if (payLineTreasuryId(p, line) !== Number(tid)) return;
+          const amt = round2(Number((line && line.amount) || 0));
+          if (amt > 0) moves.push({ date: date, desc: desc, in: 0, out: amt });
+        });
+        return;
+      }
+      if (Number(p.treasuryId) !== Number(tid) || p.paymentMethod === "آجل") return;
+      moves.push({ date: date, desc: desc, in: 0, out: p.grandTotal });
+    });
     vouchers.filter((v) => Number(v.treasuryId) === Number(tid)).forEach((v) => moves.push({ date: v.date, desc: v.desc || (v.type === "in" ? "سند قبض" : "سند صرف"), in: (v.type === "in" || v.kind === "in") ? v.amount : 0, out: (v.type === "out" || v.kind === "out") ? v.amount : 0 }));
     moves.sort((a, b) => (a.date === "بداية" ? -1 : b.date === "بداية" ? 1 : new Date(a.date) - new Date(b.date)));
 
